@@ -1,63 +1,57 @@
-# Atelier Resale CRM — финальный запуск (GitHub Pages + Apps Script + Google Sheets)
+# База с Катей — CRM для Vinted + Vestiaire
 
-Готовая бесплатная архитектура:
+Финальная бесплатная архитектура:
 
 ```text
 GitHub Pages (frontend)
       ↓
-Google Apps Script Web App (API bridge)
+Google Apps Script Web App (API)
       ↓
 Google Sheets (database)
 ```
 
-## ВАЖНО ДЛЯ ВАС
+## Что важно
 
-✅ Spreadsheet ID уже вставлен в `apps-script/Code.gs`:
-
-`1_Se3EckR9GyiF1Qk95Dp7VXwzV1AVfQLZLGAbpw5M4M`
-
-✅ Фронтенд уже подготовлен под GitHub Pages (relative paths).  
-✅ Добавлена папка `docs/` для самого простого деплоя на GitHub Pages.  
-
-Остаётся 2 ручных шага:
-1. Деплойнуть Apps Script как Web App.
-2. Вставить URL Web App в `docs/src/config.js` (и `web/src/config.js`, если хотите держать одинаково в исходниках).
+- Интерфейс: русский
+- Валюта: EUR
+- Основной ID товара: короткий номер (`item_number`, например `108`)
+- Логика под ваш workflow: Vinted/Vestiaire, быстрые покупка/продажа, контроль листинга, контроль денег
+- Общие данные на iPhone и laptop
 
 ---
 
-## Структура проекта
+## Структура
 
 ```bash
 .
 ├─ apps-script/
 │  └─ Code.gs
-├─ docs/                     # ГОТОВО ДЛЯ GITHUB PAGES
+├─ docs/                    # publish-папка для GitHub Pages
 │  ├─ index.html
 │  └─ src/
 │     ├─ main.js
 │     ├─ styles.css
 │     ├─ config.js
 │     └─ config.example.js
-├─ web/                      # рабочие исходники frontend
+├─ web/                     # рабочая копия frontend
 │  ├─ index.html
 │  └─ src/
 │     ├─ main.js
 │     ├─ styles.css
 │     ├─ config.js
 │     └─ config.example.js
-├─ server/                   # optional local legacy mock
-└─ README.md
+└─ server/                  # optional legacy local mock backend
 ```
 
 ---
 
-## 1) Google Sheets (у вас уже есть ID)
+## Google Sheets (source of truth)
 
-Используется таблица:
+Используется Spreadsheet ID:
 
 `1_Se3EckR9GyiF1Qk95Dp7VXwzV1AVfQLZLGAbpw5M4M`
 
-Убедитесь, что есть листы:
+Листы (названия важны):
 
 1. `Inventory`
 2. `Purchases`
@@ -65,122 +59,141 @@ Google Sheets (database)
 4. `Statistics`
 5. `Activity Log`
 
-> Если листы пустые — Apps Script сам добавит заголовки.
+Apps Script сам добавит заголовки, если листы пустые.
+
+### Текущая модель Inventory
+
+- item_number
+- photo_url
+- model_name
+- category
+- purchase_date
+- total_cost
+- status
+- listed_vinted
+- listed_vestiaire
+- need_rephoto
+- money_received
+- sale_price
+- sale_date
+- platform
+- buyer
+- platform_fee
+- profit
+- notes
+- updated_at
 
 ---
 
-## 2) Apps Script — что сделать
+## Что изменено под реальный workflow
+
+### 1) Короткий номер товара
+Во всём приложении основной идентификатор — `item_number` (короткий, цифровой/короткий текст).
+
+### 2) Трекинг листинга
+У каждого товара есть флаги:
+- `listed_vinted` (yes/no)
+- `listed_vestiaire` (yes/no)
+- `need_rephoto` (yes/no)
+
+### 3) Логика денег
+Поле `money_received` (yes/no).
+
+### 4) Остаток закупа
+`purchase_balance` считается так:
+- берем `total_cost` всех товаров,
+- включаем:
+  - товары НЕ проданные,
+  - товары проданные, но `money_received != yes`.
+- если товар продан и `money_received = yes`, его себестоимость больше не учитывается в остатке закупа.
+
+### 5) Продажи по месяцу
+Есть отдельная вкладка **Продажи**:
+- выбор месяца
+- список проданных позиций за месяц
+- колонки: номер, себестоимость, цена продажи, прибыль, дата, статус денег, статус
+- итоги: количество, выручка, прибыль
+
+---
+
+## Apps Script setup
 
 1. Откройте `https://script.google.com`
-2. Создайте проект.
-3. Вставьте код из `apps-script/Code.gs`.
-4. Проверьте, что в `CONFIG.SPREADSHEET_ID` уже стоит ваш ID.
-5. Нажмите **Deploy → New deployment**.
-6. Тип: **Web app**.
-7. Execute as: **Me**.
-8. Who has access: **Anyone**.
-9. Нажмите **Deploy**.
-10. Скопируйте `Web app URL`.
+2. Создайте проект
+3. Вставьте код из `apps-script/Code.gs`
+4. Убедитесь, что `SPREADSHEET_ID` уже ваш (он уже вставлен)
+5. Deploy → New deployment → Web app
+6. Execute as: Me
+7. Who has access: Anyone
+8. Deploy
+9. Скопируйте Web App URL
 
 ---
 
-## 3) Куда вставить URL Apps Script
+## Куда вставить Apps Script URL
 
-Откройте файл:
+Откройте:
 
 - `docs/src/config.js`
 
-и вставьте URL:
+и убедитесь, что там ваш URL:
 
 ```js
-export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycb.../exec';
+export const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/.../exec';
 ```
 
-Рекомендуется также обновить:
-
-- `web/src/config.js`
-
-чтобы исходники и `docs/` были одинаковыми.
+(Синхронно можно держать тот же URL в `web/src/config.js`.)
 
 ---
 
-## 4) Самый простой GitHub Pages деплой
+## GitHub Pages deploy (самый простой)
 
-### Шаги
+1. Запушьте проект в GitHub
+2. Repo → Settings → Pages
+3. Source: Deploy from a branch
+4. Branch: `main`
+5. Folder: `/docs`
+6. Save
 
-1. Загрузите проект в GitHub.
-2. Откройте репозиторий → **Settings** → **Pages**.
-3. Source: **Deploy from a branch**.
-4. Branch: `main`.
-5. Folder: `/docs`.
-6. Save.
-7. Дождитесь URL сайта от GitHub Pages.
-
-Готово — сайт будет работать как статический frontend и обращаться к Apps Script.
+Готово.
 
 ---
 
-## 5) Как протестировать (laptop + iPhone)
+## Проверка с laptop + iPhone
 
-### На laptop
-
-1. Откройте GitHub Pages URL.
-2. Добавьте закупку.
-3. Проверьте, что строка появилась в `Inventory` и `Purchases`.
-4. Оформите продажу.
-5. Проверьте `Sales`, обновление `Inventory`, запись в `Activity Log`.
-
-### На iPhone
-
-1. Откройте тот же URL.
-2. Убедитесь, что те же данные видны сразу.
-3. Измените статус товара.
-4. Проверьте обновление в таблице.
+1. Откройте GitHub Pages URL на laptop
+2. Создайте покупку
+3. Проверьте, что строка появилась в `Inventory` и `Purchases`
+4. Сделайте продажу
+5. Проверьте `Sales`, обновление в `Inventory`, запись в `Activity Log`
+6. Откройте сайт на iPhone
+7. Обновите страницу и убедитесь, что данные те же
+8. Смените статус/флаги и проверьте, что Sheets обновился
 
 ---
 
-## 6) API contract (кратко)
-
-Frontend вызывает Apps Script по action:
+## API actions (frontend -> Apps Script)
 
 GET:
-- `?action=getInventory`
-- `?action=getDashboard`
-- `?action=getAnalytics`
-- `?action=getQC`
-- `?action=getActivity`
+- `getInventory`
+- `getDashboard`
+- `getAnalytics`
+- `getQC`
+- `getActivity`
 
 POST:
 - `createPurchase`
 - `recordSale`
 - `updateStatus`
 - `editItem`
-- `getItemById`
-
-Ответы:
-
-```json
-{ "ok": true, "...": "..." }
-```
-или
-```json
-{ "ok": false, "error": "..." }
-```
+- `getSalesByMonth`
+- `getItemByNumber`
 
 ---
 
-## 7) Что уже исправлено для launch
+## Что можно улучшить позже (v2)
 
-- Spreadsheet ID вставлен в Apps Script.
-- Relative paths исправлены для GitHub Pages.
-- Добавлен явный placeholder-комментарий для Apps Script URL в config.js.
-- Подготовлена папка `docs/` для максимально простого деплоя.
-
----
-
-## Мини-чеклист (самое короткое)
-
-1. Deploy Apps Script Web App.
-2. Вставить URL в `docs/src/config.js`.
-3. Включить GitHub Pages из `/docs`.
-4. Открыть с laptop и iPhone и проверить добавление/продажу.
+- Авто-архивация старых продаж
+- Экспорт отчёта по месяцу в PDF/CSV
+- Отдельный фильтр только по Vinted / только по Vestiaire
+- Простая авторизация PIN-кодом
