@@ -39,11 +39,11 @@ const MENU_PAGES = [
 ];
 
 const PLATFORM_OPTIONS = ['Vinted', 'Vestiaire'];
+const CATEGORY_OPTIONS = ['Сумка', 'Часы', 'Аксессуар', 'Обувь'];
 
 const money = (v) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(v || 0));
 const n = (v) => Number(v || 0);
 const boolText = (v) => ['true', '1', 'yes', 'да', 'y'].includes(String(v || '').toLowerCase()) ? 'yes' : 'no';
-const yesNo = (v) => boolText(v) === 'yes' ? 'Да' : 'Нет';
 const shippingLabel = (status) => (SHIPPING_META[status] || SHIPPING_META.pending).label;
 
 const api = async (action, payload = null) => {
@@ -99,17 +99,62 @@ function App() {
     setLoading(true);
     setError('');
     try {
-      const [i, d, a, an, qc, sm, ship] = await Promise.all([
-        api('getInventory'), api('getDashboard'), api('getActivity'), api('getAnalytics'),
-        api('getQC'), api('getSalesByMonth', { month: salesMonth }), api('getShippingOverview')
+      const [i, d, a, an, qc] = await Promise.all([
+        api('getInventory'),
+        api('getDashboard'),
+        api('getActivity'),
+        api('getAnalytics'),
+        api('getQC')
       ]);
       setItems(i.items || []);
       setDashboard(d.stats || {});
       setActivity(a.activity || []);
       setAnalytics(an || { monthly: {} });
       setAttention(qc.attention || []);
+
+      let sm = { month: salesMonth, items: [], summary: {} };
+      try {
+        sm = await api('getSalesByMonth', { month: salesMonth });
+      } catch (salesErr) {
+        if (!String(salesErr.message || '').includes('Unknown action: getSalesByMonth')) throw salesErr;
+        const fromItems = (i.items || [])
+          .filter((x) => String(x.sale_date || '').slice(0, 7) === salesMonth && Number(x.sale_price || 0) > 0)
+          .map((x) => ({
+            sale_id: x.sale_id || '',
+            item_number: x.item_number,
+            sale_date: x.sale_date,
+            sale_price: Number(x.sale_price || 0),
+            platform: x.platform || '',
+            total_cost: Number(x.total_cost || 0),
+            profit: Number(x.profit || 0),
+            money_received: x.money_received || 'no',
+            status: x.status || 'sold',
+            shipping_status: x.shipping_status || 'pending',
+            shipping_label_url: x.shipping_label_url || ''
+          }))
+          .sort((a, b) => String(a.sale_date || '').localeCompare(String(b.sale_date || '')));
+        sm = {
+          month: salesMonth,
+          items: fromItems,
+          summary: {
+            sold_count: fromItems.length,
+            revenue: fromItems.reduce((acc, x) => acc + Number(x.sale_price || 0), 0),
+            profit: fromItems.reduce((acc, x) => acc + Number(x.profit || 0), 0)
+          }
+        };
+      }
+
       setMonthSales(sm || { month: salesMonth, items: [], summary: {} });
-      setShippingOverview(ship || { summary: {}, items: [] });
+
+      const shippingItems = (sm?.items || []).filter((x) => ['pending', 'shipped'].includes(String(x.shipping_status || 'pending')));
+      setShippingOverview({
+        summary: {
+          pending: (sm?.items || []).filter((x) => String(x.shipping_status || 'pending') === 'pending').length,
+          shipped: (sm?.items || []).filter((x) => String(x.shipping_status || '') === 'shipped').length,
+          delivered: (sm?.items || []).filter((x) => String(x.shipping_status || '') === 'delivered').length
+        },
+        items: shippingItems
+      });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -130,7 +175,14 @@ function App() {
 
   const rephotoItems = useMemo(() => items.filter((i) => boolText(i.need_rephoto) === 'yes'), [items]);
 
-  const savePurchase = async (payload) => { await api('createPurchase', payload); setShowPurchase(false); setShowFabMenu(false); setToast('Покупка сохранена'); loadAll(); };
+  const savePurchase = async (payload) => {
+    const r = await api('createPurchase', payload);
+    if (!r?.item?.item_number) throw new Error('Покупка не сохранилась');
+    setShowPurchase(false);
+    setShowFabMenu(false);
+    setToast('Покупка сохранена');
+    loadAll();
+  };
   const saveSale = async (payload) => { await api('recordSale', payload); setShowSale(false); setShowFabMenu(false); setToast('Продажа сохранена'); loadAll(); };
   const saveItem = async (itemNumber, updates) => { await api('editItem', { item_number: itemNumber, updates }); setSelected(null); setToast('Карточка обновлена'); loadAll(); };
   const updateStatus = async (itemNumber, status) => { await api('updateStatus', { item_number: itemNumber, status }); setToast('Статус обновлён'); loadAll(); };
@@ -167,14 +219,14 @@ function App() {
         ['💶', 'Прибыль за месяц', money(dashboard.profit_this_month)], ['🏦', 'Остаток закупа', money(dashboard.purchase_balance)],
         ['📭', 'Не отправлено', shippingOverview.summary?.pending || 0], ['📦', 'В пути', shippingOverview.summary?.shipped || 0]
       ].map(([i, t, v]) => html`<div className="premium-card rounded-2xl p-4"><p className="text-xs text-luxe-muted">${i} ${t}</p><p className="text-lg font-semibold mt-1">${v}</p></div>`)}</div>
-      <div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Ожидают отправки / доставки</h2><ul className="mt-2 text-sm space-y-2">${(shippingOverview.items || []).slice(0, 7).map((s) => html`<li className="border-b border-luxe-border/60 pb-2">№${s.item_number} · ${s.platform || '—'} · ${s.sale_date || '—'} · TTN: ${s.tracking_number || '—'} · <${ShippingBadge} status=${s.shipping_status}/></li>`)}</ul></div></section>`}
+      <div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Ожидают отправки / доставки</h2><ul className="mt-2 text-sm space-y-2">${(shippingOverview.items || []).slice(0, 7).map((s) => html`<li className="border-b border-luxe-border/60 pb-2">№${s.item_number} · ${s.platform || '—'} · ${s.sale_date || '—'} · <${ShippingBadge} status=${s.shipping_status}/></li>`)}</ul></div></section>`}
 
       ${!loading && page === 'inventory' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-3 grid grid-cols-1 gap-2 items-end"><div><label className="text-xs text-luxe-muted">Поиск</label><input className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="Номер или модель"/></div><div><label className="text-xs text-luxe-muted">Статус</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${statusFilter} onChange=${(e) => setStatusFilter(e.target.value)}><option value="all">Все</option>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></div></div>
-      <div className="space-y-2">${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between items-start gap-2"><div><p className="font-semibold">№${i.item_number} · ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">${i.platform || '—'} · ${i.sale_date || '—'}</p><p className="text-sm">TTN: ${i.tracking_number || '—'}</p></div><div className="flex flex-col gap-1 items-end"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
+      <div className="space-y-2">${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between items-start gap-2"><div><p className="font-semibold">№${i.item_number} · ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">${i.platform || '—'} · ${i.sale_date || '—'}</p><p className="text-sm">Категория: ${i.category || '—'}</p></div><div className="flex flex-col gap-1 items-end"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
 
       ${!loading && page === 'sales' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4 flex flex-wrap items-end gap-3"><div><label className="text-xs text-luxe-muted">Месяц</label><input type="month" className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></div></div>
       <div className="grid grid-cols-3 gap-3">${[['Продано', monthSales.summary?.sold_count || 0], ['Выручка', money(monthSales.summary?.revenue)], ['Прибыль', money(monthSales.summary?.profit)]].map(([t, v]) => html`<div className="premium-card rounded-2xl p-3"><p className="text-xs text-luxe-muted">${t}</p><p className="text-lg font-semibold">${v}</p></div>`)}</div>
-      <div className="space-y-2">${(monthSales.items || []).map((s) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${s.sale_date || '—'} · ${money(s.sale_price)}</p><p className="text-sm">TTN: ${s.tracking_number || '—'}</p></div><div className="flex flex-col gap-1 items-end"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}</div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`)}</div></section>`}
+      <div className="space-y-2">${(monthSales.items || []).map((s) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${s.sale_date || '—'} · ${money(s.sale_price)}</p></div><div className="flex flex-col gap-1 items-end"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}</div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`)}</div></section>`}
 
       ${!loading && page === 'analytics' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Продажи по месяцам</h2><ul className="mt-2 text-sm space-y-2">${Object.entries(analytics.monthly || {}).sort(([a], [b]) => a.localeCompare(b)).map(([m, v]) => html`<li className="border-b border-luxe-border/60 pb-2"><div className="flex justify-between"><b>${m}</b><span>${v.sold_count} шт.</span></div><div className="text-luxe-muted">Выручка: ${money(v.revenue)} · Прибыль: ${money(v.profit)}</div></li>`)}</ul></div></section>`}
       ${!loading && page === 'qc' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Контроль</h2><ul className="mt-2 text-sm list-disc list-inside">${attention.map((i) => html`<li>№ ${i.item_number} · ${i.model_name || '—'}</li>`)}</ul></section>`}
@@ -202,17 +254,63 @@ function App() {
 }
 
 function PurchaseModal({ close, save }) {
-  const [f, setF] = useState({ item_number: '', photo_url: '', model_name: '', category: '', purchase_date: new Date().toISOString().slice(0, 10), total_cost: '', status: 'purchased', listed_vinted: 'no', listed_vestiaire: 'no', need_rephoto: 'no', money_received: 'no', notes: '' });
+  const [f, setF] = useState({
+    item_number: '',
+    photo_url: '',
+    model_name: '',
+    category: 'Сумка',
+    purchase_date: new Date().toISOString().slice(0, 10),
+    total_cost: '',
+    status: 'purchased',
+    listed_vinted: 'no',
+    listed_vestiaire: 'no',
+    need_rephoto: 'no',
+    money_received: 'no',
+    notes: ''
+  });
+  const [preview, setPreview] = useState('');
   const invalid = !String(f.item_number).trim() || !String(f.model_name).trim() || n(f.total_cost) <= 0;
-  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); if (!invalid) save(f); }} className="max-w-2xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Покупка</h2><button type="button" onClick=${close}>✕</button></div><div className="grid md:grid-cols-2 gap-2"><label className="text-xs">Номер товара<input className="w-full mt-1 rounded-xl border p-2" value=${f.item_number} onInput=${(e) => setF({ ...f, item_number: e.target.value })}/></label><label className="text-xs">Модель<input className="w-full mt-1 rounded-xl border p-2" value=${f.model_name} onInput=${(e) => setF({ ...f, model_name: e.target.value })}/></label><label className="text-xs">Себестоимость<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.total_cost} onInput=${(e) => setF({ ...f, total_cost: e.target.value })}/></label></div><button disabled=${invalid} className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-3 disabled:opacity-50">Сохранить покупку</button></form></div>`;
+
+  const onPickPhoto = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const data = String(reader.result || '');
+      setPreview(data);
+      setF({ ...f, photo_url: data });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); if (!invalid) save(f); }} className="max-w-2xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Покупка</h2><button type="button" onClick=${close}>✕</button></div>
+    <div className="grid md:grid-cols-2 gap-2">
+      <label className="text-xs">Номер товара<input className="w-full mt-1 rounded-xl border p-2" value=${f.item_number} onInput=${(e) => setF({ ...f, item_number: e.target.value })} placeholder="108"/></label>
+      <label className="text-xs">Модель<input className="w-full mt-1 rounded-xl border p-2" value=${f.model_name} onInput=${(e) => setF({ ...f, model_name: e.target.value })}/></label>
+      <label className="text-xs">Категория<select className="w-full mt-1 rounded-xl border p-2" value=${f.category} onChange=${(e) => setF({ ...f, category: e.target.value })}>${CATEGORY_OPTIONS.map((c) => html`<option value=${c}>${c}</option>`)}</select></label>
+      <label className="text-xs">Дата покупки<input type="date" className="w-full mt-1 rounded-xl border p-2" value=${f.purchase_date} onInput=${(e) => setF({ ...f, purchase_date: e.target.value })}/></label>
+      <label className="text-xs">Себестоимость<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.total_cost} onInput=${(e) => setF({ ...f, total_cost: e.target.value })}/></label>
+      <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => setF({ ...f, status: e.target.value })}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
+    </div>
+    <div className="rounded-xl border border-luxe-border p-3 bg-white"><p className="text-sm font-medium">Фото товара</p><input type="file" accept="image/*" onChange=${onPickPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Выберите фото с телефона/компьютера. Ссылка — только как запасной вариант.</p><input className="w-full mt-2 rounded-xl border p-2 text-sm" value=${f.photo_url} onInput=${(e) => setF({ ...f, photo_url: e.target.value })} placeholder="(опционально) или вставьте ссылку"/>${(preview || f.photo_url) ? html`<img src=${preview || f.photo_url} className="mt-2 h-28 rounded-lg object-cover"/>` : null}</div>
+    <label className="text-xs block">Заметки<textarea className="w-full mt-1 rounded-xl border p-2" rows="2" value=${f.notes} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea></label>
+    <button disabled=${invalid} className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-3 disabled:opacity-50">Сохранить покупку</button></form></div>`;
 }
 
 function SaleModal({ close, items, save }) {
   const sellable = items.filter((x) => !x.sale_id);
-  const [f, setF] = useState({ item_number: sellable[0]?.item_number || '', sale_price: '', platform: 'Vinted', buyer: '', platform_fee: '', status: 'sold', money_received: 'no', notes: '', tracking_number: '', shipping_label_url: '', shipping_date: '', shipping_status: 'pending' });
+  const [itemNumber, setItemNumber] = useState('');
+  const [showShipBlock, setShowShipBlock] = useState(false);
+  const [f, setF] = useState({ sale_price: '', platform: 'Vinted', money_received: 'no', status: 'sold', notes: '', shipping_label_url: '', shipping_status: 'pending', shipping_date: '', tracking_number: '' });
   const [labelData, setLabelData] = useState('');
-  const item = items.find((x) => String(x.item_number) === String(f.item_number));
-  const invalid = !f.item_number || n(f.sale_price) <= 0;
+
+  const suggestions = useMemo(() => {
+    const q = itemNumber.trim();
+    if (!q) return sellable.slice(0, 8);
+    return sellable.filter((i) => String(i.item_number).includes(q)).slice(0, 8);
+  }, [itemNumber, sellable]);
+  const selectedItem = sellable.find((x) => String(x.item_number) === String(itemNumber.trim()));
+  const invalid = !selectedItem || n(f.sale_price) <= 0;
 
   const onPickLabel = (e) => {
     const file = e.target.files?.[0];
@@ -226,30 +324,37 @@ function SaleModal({ close, items, save }) {
     reader.readAsDataURL(file);
   };
 
-  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); if (!invalid) save({ ...f, sale_date: new Date().toISOString().slice(0, 10) }); }} className="max-w-xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Продажа</h2><button type="button" onClick=${close}>✕</button></div>
-    <label className="text-xs block">Товар<select className="w-full mt-1 rounded-xl border p-2" value=${f.item_number} onChange=${(e) => setF({ ...f, item_number: e.target.value })}>${sellable.map((i) => html`<option value=${i.item_number}>№ ${i.item_number} · ${i.model_name || '—'}</option>`)}</select></label>
+  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); if (!invalid) save({ ...f, item_number: selectedItem.item_number, sale_date: new Date().toISOString().slice(0, 10) }); }} className="max-w-xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Продажа</h2><button type="button" onClick=${close}>✕</button></div>
+    <label className="text-xs block">Номер товара<input className="w-full mt-1 rounded-xl border p-2" value=${itemNumber} onInput=${(e) => setItemNumber(e.target.value)} placeholder="Например 108"/></label>
+    ${itemNumber && !selectedItem && suggestions.length > 0 ? html`<div className="rounded-xl border border-luxe-border bg-white p-2 text-sm"><p className="text-xs text-luxe-muted mb-1">Подсказки:</p><div className="flex flex-wrap gap-2">${suggestions.map((s) => html`<button type="button" className="tap-btn rounded-lg border border-luxe-border px-2 py-1" onClick=${() => setItemNumber(String(s.item_number))}>№${s.item_number} · ${s.model_name || '—'}</button>`)}</div></div>` : null}
+    ${selectedItem ? html`<div className="rounded-xl bg-[#f5efe6] p-3 text-sm">Товар: <b>№${selectedItem.item_number} · ${selectedItem.model_name || '—'}</b><br/>Себестоимость: <b>${money(selectedItem.total_cost)}</b> · Статус: <b>${STATUS_META[selectedItem.status]?.label || selectedItem.status}</b><br/>Листинг: Vinted ${boolText(selectedItem.listed_vinted) === 'yes' ? 'Да' : 'Нет'} · Vestiaire ${boolText(selectedItem.listed_vestiaire) === 'yes' ? 'Да' : 'Нет'}</div>` : html`<div className="rounded-xl bg-amber-50 text-amber-800 p-3 text-sm">Введите номер товара, чтобы выбрать позицию.</div>`}
+
     <div className="grid md:grid-cols-2 gap-2">
       <label className="text-xs">Цена продажи<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.sale_price} onInput=${(e) => setF({ ...f, sale_price: e.target.value })}/></label>
       <label className="text-xs">Платформа<select className="w-full mt-1 rounded-xl border p-2" value=${f.platform} onChange=${(e) => setF({ ...f, platform: e.target.value })}>${PLATFORM_OPTIONS.map((p) => html`<option>${p}</option>`)}</select></label>
-      <label className="text-xs">TTN<input className="w-full mt-1 rounded-xl border p-2" value=${f.tracking_number} onInput=${(e) => setF({ ...f, tracking_number: e.target.value })}/></label>
-      <label className="text-xs">Статус доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_status} onChange=${(e) => setF({ ...f, shipping_status: e.target.value })}>${Object.keys(SHIPPING_META).filter((x) => x !== 'cancelled').map((s) => html`<option value=${s}>${shippingLabel(s)}</option>`)}</select></label>
-      <label className="text-xs">Дата отправки<input type="date" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_date} onInput=${(e) => setF({ ...f, shipping_date: e.target.value })}/></label>
       <label className="text-xs">Деньги зашли<select className="w-full mt-1 rounded-xl border p-2" value=${f.money_received} onChange=${(e) => setF({ ...f, money_received: e.target.value })}><option value="no">Нет</option><option value="yes">Да</option></select></label>
+      <label className="text-xs">Статус продажи / доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => setF({ ...f, status: e.target.value })}>${['sold', 'shipped', 'delivered'].map((s) => html`<option value=${s}>${STATUS_META[s].label}</option>`)}</select></label>
     </div>
-    <div className="rounded-xl border border-luxe-border p-3 bg-white"><p className="text-sm font-medium">Лейбл доставки (PDF/изображение)</p><input type="file" accept="application/pdf,image/*" onChange=${onPickLabel} className="mt-2 text-sm"/><input className="w-full mt-2 rounded-xl border p-2 text-sm" value=${f.shipping_label_url} onInput=${(e) => setF({ ...f, shipping_label_url: e.target.value })} placeholder="или вставьте ссылку"/>${(labelData || f.shipping_label_url) && html`<a className="mt-2 text-blue-700 underline block" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>`}</div>
-    <div className="rounded-xl bg-[#f5efe6] p-3 text-sm">Себестоимость: <b>${money(item?.total_cost)}</b></div>
+
+    <label className="text-xs block">Заметки (опционально)<textarea className="w-full mt-1 rounded-xl border p-2" rows="2" value=${f.notes} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea></label>
+
+    <div className="rounded-xl border border-luxe-border p-3 bg-white">
+      <button type="button" className="tap-btn text-sm underline" onClick=${() => setShowShipBlock(!showShipBlock)}>${showShipBlock ? 'Скрыть' : 'Показать'} блок доставки (опционально)</button>
+      ${showShipBlock ? html`<div className="mt-2 space-y-2"><label className="text-xs block">Статус доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_status} onChange=${(e) => setF({ ...f, shipping_status: e.target.value })}>${Object.keys(SHIPPING_META).filter((x) => x !== 'cancelled').map((s) => html`<option value=${s}>${shippingLabel(s)}</option>`)}</select></label><label className="text-xs block">Дата отправки<input type="date" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_date} onInput=${(e) => setF({ ...f, shipping_date: e.target.value })}/></label><label className="text-xs block">TTN (опционально)<input className="w-full mt-1 rounded-xl border p-2" value=${f.tracking_number} onInput=${(e) => setF({ ...f, tracking_number: e.target.value })}/></label><p className="text-sm font-medium">Лейбл доставки</p><input type="file" accept="application/pdf,image/*" onChange=${onPickLabel} className="text-sm"/><input className="w-full rounded-xl border p-2 text-sm" value=${f.shipping_label_url} onInput=${(e) => setF({ ...f, shipping_label_url: e.target.value })} placeholder="или вставьте ссылку"/>${(labelData || f.shipping_label_url) && html`<a className="text-blue-700 underline block" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>`}</div>` : null}
+    </div>
+
     <button disabled=${invalid} className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-3 disabled:opacity-50">Сохранить продажу</button></form></div>`;
 }
 
 function ItemModal({ item, close, save, updateStatus, updateShipping, openSale }) {
   const [f, setF] = useState(item);
   return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); save(item.item_number, f); }} className="max-w-3xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Карточка № ${item.item_number}</h2><button type="button" onClick=${close}>✕</button></div>
-  <div className="grid md:grid-cols-2 gap-3"><img src=${f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-cover"/><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Платформа: <b>${f.platform || '—'}</b></p><p className="text-sm">Дата продажи: <b>${f.sale_date || '—'}</b></p><p className="text-sm">TTN: <b>${f.tracking_number || '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${f.shipping_label_url ? html`<a className="text-blue-700 underline text-sm" href=${f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<button type="button" className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-2" onClick=${openSale}>Оформить продажу</button></div></div>
+  <div className="grid md:grid-cols-2 gap-3"><img src=${f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-cover"/><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Платформа: <b>${f.platform || '—'}</b></p><p className="text-sm">Дата продажи: <b>${f.sale_date || '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${f.shipping_label_url ? html`<a className="text-blue-700 underline text-sm" href=${f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<button type="button" className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-2" onClick=${openSale}>Оформить продажу</button></div></div>
   <div className="grid md:grid-cols-2 gap-2">
     <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => { setF({ ...f, status: e.target.value }); updateStatus(item.item_number, e.target.value); }}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
-    <label className="text-xs">TTN<input className="w-full mt-1 rounded-xl border p-2" value=${f.tracking_number || ''} onInput=${(e) => setF({ ...f, tracking_number: e.target.value })}/></label>
     <label className="text-xs">Статус доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_status || 'pending'} onChange=${(e) => setF({ ...f, shipping_status: e.target.value })}>${Object.keys(SHIPPING_META).map((s) => html`<option value=${s}>${shippingLabel(s)}</option>`)}</select></label>
     <label className="text-xs">Дата отправки<input type="date" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_date || ''} onInput=${(e) => setF({ ...f, shipping_date: e.target.value })}/></label>
+    <label className="text-xs">TTN<input className="w-full mt-1 rounded-xl border p-2" value=${f.tracking_number || ''} onInput=${(e) => setF({ ...f, tracking_number: e.target.value })}/></label>
     <label className="text-xs md:col-span-2">Лейбл<input className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_label_url || ''} onInput=${(e) => setF({ ...f, shipping_label_url: e.target.value })}/></label>
   </div>
   <div className="flex gap-2"><button type="button" className="tap-btn rounded-xl border border-luxe-border px-4 py-2" onClick=${() => updateShipping(item.item_number, { tracking_number: f.tracking_number, shipping_label_url: f.shipping_label_url, shipping_date: f.shipping_date, shipping_status: f.shipping_status })}>Обновить доставку</button><button className="tap-btn rounded-xl bg-luxe-ink text-white px-4 py-2">Сохранить карточку</button></div>
