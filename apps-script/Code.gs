@@ -398,6 +398,25 @@ function editItem(itemNumber, updates) {
   if (!current) throw new Error('Товар не найден');
   const next = normalizeItem(updates, current);
   updateInventoryRow(itemNumber, next);
+
+  if (current.sale_id) {
+    updateSalesRow(current.sale_id, (sale) => ({
+      ...sale,
+      sale_date: next.sale_date,
+      sale_price: next.sale_price,
+      platform: next.platform,
+      total_cost: next.total_cost,
+      profit: next.profit,
+      money_received: next.money_received,
+      status: next.status,
+      shipping_status: next.shipping_status,
+      tracking_number: next.tracking_number,
+      shipping_label_url: next.shipping_label_url,
+      shipping_date: next.shipping_date,
+      notes: next.notes
+    }));
+  }
+
   addActivity({ item_number: itemNumber, action: 'Редактирование карточки', field: 'карточка', old_value: 'обновление', new_value: 'сохранено' });
   return next;
 }
@@ -519,7 +538,15 @@ function updateMoneyReceived(itemNumber, value) {
 }
 
 function updatePurchaseBalanceManual(value) {
-  return setSettingValue('purchase_balance_manual', toNum(value));
+  const purchases = getRows(CONFIG.SHEETS.purchases, CONFIG.HEADERS.purchases);
+  const sales = getValidSales();
+  const spent = purchases.reduce((acc, p) => acc + toNum(p.total_cost), 0);
+  const returned = sales
+    .filter((s) => boolText(s.money_received) === 'yes')
+    .reduce((acc, s) => acc + toNum(s.total_cost), 0);
+  const base = returned - spent;
+  const target = toNum(value);
+  return setSettingValue('purchase_balance_manual', target - base);
 }
 
 function deleteItem(itemNumber) {
