@@ -67,6 +67,28 @@ const sanitizeMediaFields = (obj = {}) => ({
   buyee_url: clampCell(obj.buyee_url)
 });
 
+const toCompressedImage = (file, maxSize = 420, quality = 0.68) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => reject(new Error('Не удалось обработать фото'));
+    img.src = String(reader.result || '');
+  };
+  reader.readAsDataURL(file);
+});
+
 const normalizePurchasePayload = (payload) => ({
   ...sanitizeMediaFields(payload),
   item_number: String(payload.item_number || '').trim(),
@@ -111,6 +133,23 @@ const ShippingBadge = ({ status }) => {
   return html`<span className=${`inline-flex items-center px-2 py-1 rounded-full border text-xs ${m.cls}`}>${m.label}</span>`;
 };
 
+const AnalyticsChart = ({ series = [] }) => {
+  const width = 680;
+  const height = 220;
+  const maxValue = Math.max(1, ...series.map((x) => Math.max(Number(x.revenue || 0), Number(x.profit || 0), Number(x.sold_count || 0) * 100)));
+  const step = width / Math.max(1, series.length - 1);
+  const pointsRevenue = series.map((x, i) => `${i * step},${height - (Number(x.revenue || 0) / maxValue) * (height - 28) - 8}`).join(' ');
+  const pointsProfit = series.map((x, i) => `${i * step},${height - (Number(x.profit || 0) / maxValue) * (height - 28) - 8}`).join(' ');
+  const pointsCount = series.map((x, i) => `${i * step},${height - ((Number(x.sold_count || 0) * 100) / maxValue) * (height - 28) - 8}`).join(' ');
+  return html`<div className="overflow-x-auto"><svg viewBox=${`0 0 ${width} ${height}`} className="min-w-[640px] w-full h-56">
+      <polyline fill="none" stroke="#8b6f4e" strokeWidth="3" points=${pointsRevenue}/>
+      <polyline fill="none" stroke="#16a34a" strokeWidth="3" points=${pointsProfit}/>
+      <polyline fill="none" stroke="#2563eb" strokeWidth="3" points=${pointsCount}/>
+    </svg>
+    <div className="text-xs text-luxe-muted flex flex-wrap gap-3"><span>● Выручка</span><span className="text-green-700">● Прибыль</span><span className="text-blue-700">● Кол-во (x100)</span></div>
+  </div>`;
+};
+
 function App() {
   const [page, setPage] = useState('dashboard');
   const [loading, setLoading] = useState(true);
@@ -131,6 +170,9 @@ function App() {
   const [salesMonth, setSalesMonth] = useState(new Date().toISOString().slice(0, 7));
   const [showMenu, setShowMenu] = useState(false);
   const [showFabMenu, setShowFabMenu] = useState(false);
+  const [inventoryView, setInventoryView] = useState('list');
+  const [salesView, setSalesView] = useState('list');
+  const [analyticsYear, setAnalyticsYear] = useState(new Date().getFullYear());
 
   const loadAll = async () => {
     setLoading(true);
@@ -174,6 +216,18 @@ function App() {
   }, [items, query, statusFilter]);
 
   const rephotoItems = useMemo(() => items.filter((i) => boolText(i.need_rephoto) === 'yes'), [items]);
+
+  const analyticsYearSeries = useMemo(() => Object.entries(analytics.monthly || {})
+    .filter(([m]) => Number(String(m).slice(0, 4)) === Number(analyticsYear))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([m, v]) => ({ month: m, sold_count: Number(v.sold_count || 0), revenue: Number(v.revenue || 0), profit: Number(v.profit || 0) })), [analytics, analyticsYear]);
+
+  const analyticsYearTotals = useMemo(() => ({
+    sold_count: analyticsYearSeries.reduce((a, x) => a + x.sold_count, 0),
+    revenue: analyticsYearSeries.reduce((a, x) => a + x.revenue, 0),
+    profit: analyticsYearSeries.reduce((a, x) => a + x.profit, 0),
+    share_each: analyticsYearSeries.reduce((a, x) => a + x.profit, 0) / 3
+  }), [analyticsYearSeries]);
 
   const humanError = (err, fallback) => {
     const msg = String(err?.message || '').trim();
@@ -259,14 +313,15 @@ function App() {
       ].map(([i, t, v]) => html`<div className="premium-card rounded-2xl p-4"><p className="text-xs text-luxe-muted">${i} ${t}</p><p className="text-lg font-semibold mt-1">${v}</p></div>`)}</div>
       <div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Ожидают отправки / доставки</h2><ul className="mt-2 text-sm space-y-2">${(shippingOverview.items || []).slice(0, 7).map((s) => html`<li className="border-b border-luxe-border/60 pb-2">№${s.item_number} · ${s.platform || '—'} · ${formatDate(s.sale_date)} · <${ShippingBadge} status=${s.shipping_status}/></li>`)}</ul></div></section>`}
 
-      ${!loading && page === 'inventory' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-3 grid grid-cols-1 gap-2 items-end"><div><label className="text-xs text-luxe-muted">Поиск</label><input className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="Номер или модель"/></div><div><label className="text-xs text-luxe-muted">Статус</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${statusFilter} onChange=${(e) => setStatusFilter(e.target.value)}><option value="all">Все</option>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></div></div>
-      ${!filteredItems.length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">Склад пуст. Добавьте покупку через +</div>` : null}<div className="space-y-2">${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between items-start gap-2"><div><img src=${i.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=300'} className="h-16 w-16 rounded-lg object-contain bg-white border border-luxe-border mb-2"/><p className="font-semibold">№ товара: ${i.item_number || '—'}</p><p className="text-sm">Модель: ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">Категория: ${i.category || '—'}</p><p className="text-sm">Себестоимость: ${money(i.total_cost)}</p><p className="text-sm">Платформа: ${i.platform || '—'}</p><p className="text-sm">Цена продажи: ${n(i.sale_price) > 0 ? money(i.sale_price) : '—'}</p></div><div className="flex flex-col gap-1 items-end"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
+      ${!loading && page === 'inventory' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-3 grid grid-cols-1 md:grid-cols-3 gap-2 items-end"><div className="md:col-span-2"><label className="text-xs text-luxe-muted">Поиск</label><input className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="Номер или модель"/></div><div><label className="text-xs text-luxe-muted">Статус</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${statusFilter} onChange=${(e) => setStatusFilter(e.target.value)}><option value="all">Все</option>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></div><div><label className="text-xs text-luxe-muted">Вид</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${inventoryView} onChange=${(e) => setInventoryView(e.target.value)}><option value="list">Списком</option><option value="grid-sm">Плитка маленькая</option><option value="grid-lg">Плитка большая</option></select></div></div>
+      ${!filteredItems.length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">Склад пуст. Добавьте покупку через +</div>` : null}
+      <div className=${inventoryView === 'list' ? 'space-y-2' : inventoryView === 'grid-sm' ? 'grid grid-cols-2 md:grid-cols-4 gap-2' : 'grid grid-cols-1 md:grid-cols-2 gap-3'}>${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className=${inventoryView === 'list' ? 'flex justify-between items-start gap-2' : 'space-y-2'}><div><img src=${i.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=300'} className=${inventoryView === 'grid-sm' ? 'h-24 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2' : inventoryView === 'grid-lg' ? 'h-36 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2' : 'h-16 w-16 rounded-lg object-contain bg-white border border-luxe-border mb-2'}/><p className="font-semibold">№ товара: ${i.item_number || '—'}</p><p className="text-sm">Модель: ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">Категория: ${i.category || '—'}</p><p className="text-sm">Себестоимость: ${money(i.total_cost)}</p><p className="text-sm">Платформа: ${i.platform || '—'}</p><p className="text-sm">Цена продажи: ${n(i.sale_price) > 0 ? money(i.sale_price) : '—'}</p></div><div className="flex ${inventoryView === 'list' ? 'flex-col items-end' : 'flex-row'} gap-1"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
 
-      ${!loading && page === 'sales' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4 flex flex-wrap items-end gap-3"><div><label className="text-xs text-luxe-muted">Месяц</label><input type="month" className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></div><p className="text-sm text-luxe-muted">${formatMonthRu(monthSales.month || salesMonth)}</p></div>
+      ${!loading && page === 'sales' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4 flex flex-wrap items-end gap-3"><div><label className="text-xs text-luxe-muted">Месяц</label><input type="month" className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></div><div><label className="text-xs text-luxe-muted">Вид</label><select className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesView} onChange=${(e) => setSalesView(e.target.value)}><option value="list">Списком</option><option value="grid-sm">Плитка маленькая</option><option value="grid-lg">Плитка большая</option></select></div><p className="text-sm text-luxe-muted">${formatMonthRu(monthSales.month || salesMonth)}</p></div>
       <div className="grid grid-cols-3 gap-3">${[['Продано', monthSales.summary?.sold_count || 0], ['Выручка', money(monthSales.summary?.revenue)], ['Прибыль', money(monthSales.summary?.profit)]].map(([t, v]) => html`<div className="premium-card rounded-2xl p-3"><p className="text-xs text-luxe-muted">${t}</p><p className="text-lg font-semibold">${v}</p></div>`)}</div>
-      ${!(monthSales.items || []).length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">За выбранный месяц продаж нет.</div>` : null}<div className="space-y-2">${(monthSales.items || []).map((s) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${formatDate(s.sale_date || s.timestamp)} · ${money(s.sale_price)}</p></div><div className="flex flex-col gap-1 items-end"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}</div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`)}</div></section>`}
+      ${!(monthSales.items || []).length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">За выбранный месяц продаж нет.</div>` : null}<div className=${salesView === 'list' ? 'space-y-2' : salesView === 'grid-sm' ? 'grid grid-cols-2 md:grid-cols-4 gap-2' : 'grid grid-cols-1 md:grid-cols-2 gap-3'}>${(monthSales.items || []).map((s) => html`<article className="premium-card rounded-2xl p-3"><div className=${salesView === 'list' ? 'flex justify-between gap-2' : 'space-y-2'}><div><img src=${items.find((x) => String(x.item_number) === String(s.item_number))?.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=300'} className=${salesView === 'grid-sm' ? 'h-24 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2' : salesView === 'grid-lg' ? 'h-36 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2' : 'h-14 w-14 rounded-lg object-contain bg-white border border-luxe-border mb-2'}/><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${formatDate(s.sale_date || s.timestamp)} · ${money(s.sale_price)}</p></div><div className="flex ${salesView === 'list' ? 'flex-col items-end' : 'flex-row'} gap-1"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}</div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`)}</div></section>`}
 
-      ${!loading && page === 'analytics' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Продажи по месяцам</h2><ul className="mt-2 text-sm space-y-2">${Object.entries(analytics.monthly || {}).sort(([a], [b]) => a.localeCompare(b)).map(([m, v]) => html`<li className="border-b border-luxe-border/60 pb-2"><div className="flex justify-between"><b>${formatMonthRu(m)}</b><span>${v.sold_count} шт.</span></div><div className="text-luxe-muted">Выручка: ${money(v.revenue)} · Прибыль: ${money(v.profit)}</div></li>`)}</ul></div></section>`}
+      ${!loading && page === 'analytics' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><div className="flex items-end justify-between gap-2"><h2 className="font-semibold">Аналитика</h2><label className="text-xs text-luxe-muted">Год<select className="ml-2 rounded-lg border border-luxe-border p-1 bg-white" value=${analyticsYear} onChange=${(e) => setAnalyticsYear(Number(e.target.value))}>${Array.from(new Set(Object.keys(analytics.monthly || {}).map((k) => Number(String(k).slice(0,4))).filter(Boolean))).sort((a,b)=>b-a).map((y) => html`<option value=${y}>${y}</option>`)}</select></label></div><div className="grid md:grid-cols-4 gap-2 mt-3"><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Продано за год</p><p className="text-lg font-semibold">${analyticsYearTotals.sold_count}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Выручка за год</p><p className="text-lg font-semibold">${money(analyticsYearTotals.revenue)}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Прибыль за год</p><p className="text-lg font-semibold">${money(analyticsYearTotals.profit)}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">На 1 человека за год</p><p className="text-lg font-semibold">${money(analyticsYearTotals.share_each)}</p></div></div><div className="mt-3"><${AnalyticsChart} series=${analyticsYearSeries}/></div><h3 className="font-medium mt-4">Продажи по месяцам</h3><ul className="mt-2 text-sm space-y-2">${analyticsYearSeries.map((v) => html`<li className="border-b border-luxe-border/60 pb-2"><div className="flex justify-between"><b>${formatMonthRu(v.month)}</b><span>${v.sold_count} шт.</span></div><div className="text-luxe-muted">Выручка: ${money(v.revenue)} · Прибыль: ${money(v.profit)}</div></li>`)}</ul></div></section>`}
       ${!loading && page === 'qc' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Контроль</h2><ul className="mt-2 text-sm space-y-2">${attention.map((i) => html`<li className="border-b border-luxe-border/60 pb-2"><p><b>№ ${i.item_number}</b> · ${i.model_name || '—'}</p><p className="text-luxe-muted">Причина: ${i.reason_label || i.reason_code || '—'}</p></li>`)}</ul></section>`}
       ${!loading && page === 'activity' && html`<section className="premium-card rounded-2xl p-4 overflow-auto"><table className="min-w-[760px] w-full text-sm"><thead><tr className="text-xs text-luxe-muted"><th className="text-left">Время</th><th>Номер</th><th>Действие</th><th className="text-left">Описание</th></tr></thead><tbody>${activity.map((a) => html`<tr className="border-t border-luxe-border/60"><td className="py-2">${new Date(a.timestamp).toLocaleString('ru-RU')}</td><td>${a.item_number}</td><td>${a.action}</td><td>${a.description || '—'}</td></tr>`)}</tbody></table></section>`}
       ${!loading && page === 'rephoto' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Товары на перефото</h2><p className="text-sm text-luxe-muted mt-1">Всего: ${rephotoItems.length}</p></div>${rephotoItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><p className="font-semibold">№${i.item_number} · ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">${i.category || '—'}</p><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</section>`}
@@ -316,16 +371,16 @@ function PurchaseModal({ close, save }) {
   const computedTotal = n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost);
   const invalid = !String(f.item_number).trim() || !String(f.model_name).trim() || computedTotal <= 0;
 
-  const onPickPhoto = (e) => {
+  const onPickPhoto = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const data = String(reader.result || '');
+    try {
+      const data = await toCompressedImage(file);
       setPreview(data);
       setF({ ...f, photo_url: data });
-    };
-    reader.readAsDataURL(file);
+    } catch (_) {
+      setPreview('');
+    }
   };
 
   return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); if (!invalid) save({ ...f, total_cost: computedTotal }); }} className="max-w-2xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Покупка</h2><button type="button" onClick=${close}>✕</button></div>
@@ -446,6 +501,19 @@ function SaleModal({ close, items, save }) {
 function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, cancelSale }) {
   const [f, setF] = useState(item);
   const [labelData, setLabelData] = useState('');
+  const [photoPreview, setPhotoPreview] = useState('');
+
+  const onPickItemPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const data = await toCompressedImage(file);
+      setPhotoPreview(data);
+      setF({ ...f, photo_url: data });
+    } catch (_) {
+      setPhotoPreview('');
+    }
+  };
 
   const onPickShippingLabel = (e) => {
     const file = e.target.files?.[0];
@@ -460,7 +528,7 @@ function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, 
   };
 
   return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-[60] overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); save(item.item_number, { ...sanitizeMediaFields(f), total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }} className="max-w-3xl mx-auto premium-card rounded-2xl p-4 space-y-3 max-h-[calc(100vh-2rem)] overflow-auto pb-24"><div className="flex justify-between"><h2 className="font-semibold text-lg">Карточка № ${item.item_number}</h2><button type="button" onClick=${close}>✕</button></div>
-  <div className="grid md:grid-cols-2 gap-3"><img src=${f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-contain bg-white"/><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2"><button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
+  <div className="grid md:grid-cols-2 gap-3"><div><img src=${photoPreview || f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-contain bg-white"/><input type="file" accept="image/*" onChange=${onPickItemPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Сменить фото товара</p></div><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2"><button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
   <div className="grid md:grid-cols-2 gap-2">
     <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => { setF({ ...f, status: e.target.value }); updateStatus(item.item_number, e.target.value); }}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
     <label className="text-xs">Статус доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_status || 'pending'} onChange=${(e) => setF({ ...f, shipping_status: e.target.value })}>${Object.keys(SHIPPING_META).map((s) => html`<option value=${s}>${shippingLabel(s)}</option>`)}</select></label>
