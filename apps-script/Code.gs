@@ -27,7 +27,7 @@ const CONFIG = {
       'status', 'listed_vinted', 'listed_vestiaire', 'need_rephoto', 'money_received',
       'sale_id', 'sale_price', 'sale_date', 'platform', 'buyer', 'platform_fee', 'profit',
       'tracking_number', 'shipping_label_url', 'shipping_date', 'shipping_status',
-      'repair_master', 'repair_sent_date', 'sold_storage_days', 'notes', 'updated_at'
+      'repair_master', 'repair_sent_date', 'repair_notes', 'arrived_from_japan', 'japan_arrival_date', 'sold_storage_days', 'notes', 'updated_at'
     ],
     purchases: ['timestamp', 'item_number', 'model_name', 'purchase_date', 'base_cost', 'shipping_japan', 'tax', 'shipping_spain', 'repair_cost', 'total_cost', 'notes'],
     sales: [
@@ -36,7 +36,7 @@ const CONFIG = {
       'tracking_number', 'shipping_label_url', 'shipping_date', 'pre_sale_status',
       'sold_storage_days', 'is_cancelled', 'cancelled_at', 'notes'
     ],
-    statistics: ['timestamp', 'active_stock', 'stock_value', 'sold_this_month', 'profit_this_month', 'profit_share_each', 'purchase_balance', 'pending_shipping', 'in_transit', 'attention_count', 'avg_sale_days', 'oldest_item_number', 'oldest_item_days'],
+    statistics: ['timestamp', 'active_stock', 'stock_value', 'sold_this_month', 'profit_this_month', 'profit_share_each', 'purchase_balance', 'pending_shipping', 'in_transit', 'repair_count', 'attention_count', 'avg_sale_days', 'oldest_item_number', 'oldest_item_days'],
     activity: ['timestamp', 'item_number', 'action', 'field', 'old_value', 'new_value', 'actor'],
     settings: ['key', 'value']
   },
@@ -138,6 +138,9 @@ function getSheet(name, headers) {
     sale_date: ['sale_date'],
     platform: ['platform'],
     shipping_status: ['shipping_status'],
+    arrived_from_japan: ['arrived_from_japan'],
+    japan_arrival_date: ['japan_arrival_date', 'arrived_date'],
+    repair_notes: ['repair_notes', 'repair_comment'],
     tracking_number: ['tracking_number'],
     shipping_label_url: ['shipping_label_url'],
     notes: ['notes'],
@@ -148,10 +151,10 @@ function getSheet(name, headers) {
     const obj = {};
     oldHeaders.forEach((h, i) => { if (h) obj[h] = row[i]; });
     return headers.map((h) => {
-      if (obj[h] != null && obj[h] !== '') return obj[h];
+      if (obj[h] != null && obj[h] !== '') return cellText(obj[h]);
       const alt = aliases[h] || [];
       for (let i = 0; i < alt.length; i += 1) {
-        if (obj[alt[i]] != null && obj[alt[i]] !== '') return obj[alt[i]];
+        if (obj[alt[i]] != null && obj[alt[i]] !== '') return cellText(obj[alt[i]]);
       }
       return '';
     });
@@ -176,7 +179,7 @@ function getRows(sheetName, headers) {
 }
 
 function appendRow(sheetName, headers, obj) {
-  getSheet(sheetName, headers).appendRow(headers.map((h) => obj[h] == null ? '' : obj[h]));
+  getSheet(sheetName, headers).appendRow(headers.map((h) => obj[h] == null ? '' : cellText(obj[h])));
 }
 
 function updateInventoryRow(itemNumber, nextObj) {
@@ -185,7 +188,7 @@ function updateInventoryRow(itemNumber, nextObj) {
   const idx = rows.findIndex((r) => String(r.item_number) === String(itemNumber));
   if (idx === -1) throw new Error('Товар не найден');
   sh.getRange(idx + 2, 1, 1, CONFIG.HEADERS.inventory.length)
-    .setValues([CONFIG.HEADERS.inventory.map((h) => nextObj[h] == null ? '' : nextObj[h])]);
+    .setValues([CONFIG.HEADERS.inventory.map((h) => nextObj[h] == null ? '' : cellText(nextObj[h]))]);
 }
 
 function updateSalesRow(saleId, updater) {
@@ -195,7 +198,7 @@ function updateSalesRow(saleId, updater) {
   if (idx === -1) throw new Error('Продажа не найдена');
   const next = updater(rows[idx]);
   sh.getRange(idx + 2, 1, 1, CONFIG.HEADERS.sales.length)
-    .setValues([CONFIG.HEADERS.sales.map((h) => next[h] == null ? '' : next[h])]);
+    .setValues([CONFIG.HEADERS.sales.map((h) => next[h] == null ? '' : cellText(next[h]))]);
   return next;
 }
 
@@ -261,6 +264,24 @@ function diffDays(startDate, endDate) {
   if (!s || !e) return 0;
   return Math.max(0, Math.floor((e.getTime() - s.getTime()) / 86400000));
 }
+
+function storageStartDate(item) {
+  if (boolText(item.arrived_from_japan) === 'yes' && String(item.japan_arrival_date || '').trim()) {
+    return item.japan_arrival_date;
+  }
+  return '';
+}
+
+function calcStorageDays(item, endDate) {
+  const start = storageStartDate(item);
+  if (!start) return 0;
+  return diffDays(start, endDate || new Date().toISOString().slice(0, 10));
+}
+
+function paidProfit(sale) {
+  return boolText(sale.money_received) === 'yes' ? toNum(sale.profit) : 0;
+}
+
 function boolText(v) {
   const s = String(v == null ? '' : v).trim().toLowerCase();
   return (s === 'true' || s === '1' || s === 'yes' || s === 'да' || s === 'y') ? 'yes' : 'no';
@@ -347,12 +368,15 @@ function normalizeItem(input, prev) {
     shipping_status: shippingStatus(input.shipping_status != null ? input.shipping_status : p.shipping_status),
     repair_master: input.repair_master != null ? input.repair_master : (p.repair_master || ''),
     repair_sent_date: input.repair_sent_date != null ? input.repair_sent_date : (p.repair_sent_date || ''),
+    repair_notes: input.repair_notes != null ? input.repair_notes : (p.repair_notes || ''),
+    arrived_from_japan: boolText(input.arrived_from_japan != null ? input.arrived_from_japan : p.arrived_from_japan),
+    japan_arrival_date: input.japan_arrival_date != null ? input.japan_arrival_date : (p.japan_arrival_date || ''),
     sold_storage_days: toNum(input.sold_storage_days != null ? input.sold_storage_days : p.sold_storage_days),
     notes: cellText(input.notes != null ? input.notes : (p.notes || '')),
     updated_at: new Date().toISOString()
   };
   if (item.sale_date && toNum(item.sale_price) > 0) {
-    item.sold_storage_days = diffDays(item.purchase_date, item.sale_date);
+    item.sold_storage_days = calcStorageDays(item, item.sale_date);
   }
   item.profit = item.sale_price ? (item.sale_price - item.total_cost - item.platform_fee) : 0;
   return item;
@@ -620,7 +644,7 @@ function sendToRepair(itemNumber, masterIdOrName) {
   const found = masters.find((m) => String(m.id) === String(masterIdOrName) || String(m.name) === String(masterIdOrName));
   const masterName = found ? `${found.name}${found.city ? ` (${found.city})` : ''}` : String(masterIdOrName || '').trim();
   if (!masterName) throw new Error('Выберите мастера');
-  const next = normalizeItem({ status: 'repair', repair_master: masterName, repair_sent_date: new Date().toISOString().slice(0, 10) }, current);
+  const next = normalizeItem({ status: 'repair', repair_master: masterName, repair_sent_date: new Date().toISOString().slice(0, 10), repair_notes: current.repair_notes || '' }, current);
   updateInventoryRow(itemNumber, next);
   addActivity({ item_number: itemNumber, action: 'Отправлено в ремонт', field: 'repair_master', old_value: current.repair_master || '—', new_value: masterName });
   return next;
@@ -633,7 +657,8 @@ function completeRepair(itemNumber, repairCost) {
     repair_cost: toNum(repairCost),
     status: 'ready',
     repair_master: '',
-    repair_sent_date: ''
+    repair_sent_date: '',
+    repair_notes: ''
   }, current);
   updateInventoryRow(itemNumber, next);
   addActivity({ item_number: itemNumber, action: 'Ремонт выполнен', field: 'repair_cost', old_value: String(current.repair_cost || 0), new_value: String(next.repair_cost || 0) });
@@ -739,21 +764,22 @@ function getDashboard() {
   const activeStatuses = ['sold', 'shipped', 'delivered', 'cancelled'];
 
   const attention = getQC();
-  const soldWithDays = sales.filter((s) => toNum(s.sold_storage_days) > 0);
+  const soldWithDays = sales.filter((s) => toNum(s.sold_storage_days) > 0 && boolText(s.money_received) === 'yes');
   const activeStock = items.filter((i) => !activeStatuses.includes(String(i.status)));
   const oldest = activeStock
-    .map((i) => ({ item_number: i.item_number, days: diffDays(i.purchase_date, new Date().toISOString().slice(0, 10)), model_name: i.model_name }))
+    .map((i) => ({ item_number: i.item_number, days: calcStorageDays(i), model_name: i.model_name }))
     .sort((a, b) => b.days - a.days)[0] || { item_number: '', days: 0, model_name: '' };
 
   const stats = {
     active_stock: activeStock.length,
     stock_value: activeStock.reduce((acc, i) => acc + toNum(i.total_cost), 0),
     sold_this_month: monthSales.length,
-    profit_this_month: monthSales.reduce((a, s) => a + toNum(s.profit), 0),
-    profit_share_each: monthSales.reduce((a, s) => a + toNum(s.profit), 0) / 3,
+    profit_this_month: monthSales.reduce((a, s) => a + paidProfit(s), 0),
+    profit_share_each: monthSales.reduce((a, s) => a + paidProfit(s), 0) / 3,
     purchase_balance: calcPurchaseBalance(purchases, sales),
     pending_shipping: sales.filter((s) => shippingStatus(s.shipping_status) === 'pending').length,
-    in_transit: sales.filter((s) => shippingStatus(s.shipping_status) === 'shipped').length,
+    in_transit: items.filter((i) => String(i.status) === 'transit').length,
+    repair_count: items.filter((i) => String(i.status) === 'repair').length,
     attention_count: attention.length,
     avg_sale_days: soldWithDays.length ? soldWithDays.reduce((a, s) => a + toNum(s.sold_storage_days), 0) / soldWithDays.length : 0,
     oldest_item_number: oldest.item_number,
@@ -774,14 +800,14 @@ function getAnalytics() {
     if (!monthly[m]) monthly[m] = { sold_count: 0, revenue: 0, profit: 0, items: [] };
     monthly[m].sold_count += 1;
     monthly[m].revenue += toNum(s.sale_price);
-    monthly[m].profit += toNum(s.profit);
+    monthly[m].profit += paidProfit(s);
     monthly[m].items.push({
       sale_id: s.sale_id,
       item_number: s.item_number,
       model_name: s.model_name,
       total_cost: toNum(s.total_cost),
       sale_price: toNum(s.sale_price),
-      profit: toNum(s.profit),
+      profit: paidProfit(s),
       profit_percent: toNum(s.total_cost) ? ((toNum(s.profit) / toNum(s.total_cost)) * 100) : 0,
       sale_date: s.sale_date,
       platform: s.platform,
@@ -803,11 +829,11 @@ function getSalesByMonth(month) {
 
   return {
     month: monthKeyValue,
-    items: sales.map((s) => ({ ...s, profit_percent: toNum(s.total_cost) ? ((toNum(s.profit) / toNum(s.total_cost)) * 100) : 0 })),
+    items: sales.map((s) => ({ ...s, profit: paidProfit(s), profit_percent: toNum(s.total_cost) ? ((paidProfit(s) / toNum(s.total_cost)) * 100) : 0 })),
     summary: {
       sold_count: sales.length,
       revenue: sales.reduce((a, x) => a + toNum(x.sale_price), 0),
-      profit: sales.reduce((a, x) => a + toNum(x.profit), 0)
+      profit: sales.reduce((a, x) => a + paidProfit(x), 0)
     }
   };
 }
@@ -834,7 +860,8 @@ function getQC() {
   const reasonLabels = {
     no_photo: 'Нет фото',
     no_notes: 'Нет описания',
-    not_listed: 'Не выставлено ни на Vinted, ни на Vestiaire',
+    not_listed_vinted: 'Не выставлено на Vinted',
+    not_listed_vestiaire: 'Не выставлено на Vestiaire',
     need_rephoto: 'Нужно перефото',
     sold_no_money: 'Продано, но деньги не зашли',
     sold_not_shipped: 'Продано, но еще не отправлено',
@@ -851,28 +878,26 @@ function getQC() {
     const checks = [
       !item.photo_url ? 'no_photo' : '',
       !String(item.notes || '').trim() ? 'no_notes' : '',
-      (!sold && boolText(item.listed_vinted) === 'no' && boolText(item.listed_vestiaire) === 'no') ? 'not_listed' : '',
+      (!sold && boolText(item.listed_vinted) === 'no') ? 'not_listed_vinted' : '',
+      (!sold && boolText(item.listed_vestiaire) === 'no') ? 'not_listed_vestiaire' : '',
       boolText(item.need_rephoto) === 'yes' ? 'need_rephoto' : '',
       (String(item.status) === 'repair' && diffDays(item.repair_sent_date || item.updated_at, new Date().toISOString().slice(0, 10)) > 14) ? 'repair_too_long' : '',
-      (!sold && diffDays(item.purchase_date, new Date().toISOString().slice(0, 10)) > 90) ? 'stale_stock' : '',
+      (!sold && calcStorageDays(item) > 90) ? 'stale_stock' : '',
       (sold && boolText(item.money_received) === 'no') ? 'sold_no_money' : '',
       (sold && sh === 'pending') ? 'sold_not_shipped' : '',
       (sold && sh === 'shipped') ? 'shipped_not_delivered' : ''
     ].filter(Boolean);
 
     if (!checks.length) return acc;
-    checks.forEach((code) => {
-      acc.push({
-        item_number: item.item_number,
-        model_name: item.model_name,
-        status: item.status,
-        shipping_status: item.shipping_status,
-        money_received: item.money_received,
-        reason_code: code,
-        reason_label: reasonLabels[code] || code,
-        photo_url: item.photo_url,
-        item: item
-      });
+    acc.push({
+      item_number: item.item_number,
+      model_name: item.model_name,
+      status: item.status,
+      shipping_status: item.shipping_status,
+      money_received: item.money_received,
+      photo_url: item.photo_url,
+      reasons: checks.map((code) => ({ code, label: reasonLabels[code] || code })),
+      item: item
     });
     return acc;
   }, []);
