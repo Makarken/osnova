@@ -199,19 +199,20 @@ function activeSalesOnly(sales) {
 }
 
 
-function validSaleRow(sale, itemsByNumber) {
+function saleDateValue(sale) {
+  return String(sale.sale_date || sale.timestamp || '').trim();
+}
+
+function validSaleRow(sale) {
   if (isCancelledSale(sale)) return false;
   if (!String(sale.item_number || '').trim()) return false;
   if (toNum(sale.sale_price) <= 0) return false;
-  if (itemsByNumber && !itemsByNumber[String(sale.item_number)]) return false;
+  if (!saleDateValue(sale)) return false;
   return true;
 }
 
 function getValidSales() {
-  const items = getInventory();
-  const byNumber = {};
-  items.forEach((i) => { byNumber[String(i.item_number)] = true; });
-  return getRows(CONFIG.SHEETS.sales, CONFIG.HEADERS.sales).filter((s) => validSaleRow(s, byNumber));
+  return getRows(CONFIG.SHEETS.sales, CONFIG.HEADERS.sales).filter((s) => validSaleRow(s));
 }
 function createSaleId(itemNumber) {
   return String(itemNumber) + '-' + new Date().getTime();
@@ -446,7 +447,24 @@ function cancelSale(itemNumber, saleId) {
 }
 
 function getActivity() {
+  const descriptionByAction = {
+    'Добавление покупки': 'Добавление покупки',
+    'Оформление продажи': 'Оформление продажи',
+    'Обновление доставки': 'Обновление доставки',
+    'Отмена продажи': 'Отмена продажи',
+    'Изменение статуса': 'Изменение статуса',
+    'Редактирование карточки': 'Обновление карточки товара'
+  };
+
   return getRows(CONFIG.SHEETS.activity, CONFIG.HEADERS.activity)
+    .map((row) => {
+      const base = descriptionByAction[row.action] || row.action || 'Действие';
+      const details = row.field ? ` (${row.field}: ${row.old_value || '—'} → ${row.new_value || '—'})` : '';
+      return {
+        ...row,
+        description: `${base}${details}`
+      };
+    })
     .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
 }
 
@@ -463,11 +481,12 @@ function getDashboard() {
   const items = getInventory();
   const sales = getValidSales();
   const currentMonth = monthKey(new Date().toISOString());
-  const monthSales = sales.filter((s) => monthKey(s.sale_date || s.timestamp) === currentMonth);
+  const monthSales = sales.filter((s) => monthKey(saleDateValue(s)) === currentMonth);
+  const activeStatuses = ['sold', 'shipped', 'delivered', 'cancelled'];
 
   const stats = {
-    active_stock: items.filter((i) => !['sold', 'shipped', 'delivered', 'cancelled'].includes(String(i.status))).length,
-    stock_value: items.filter((i) => !['sold', 'shipped', 'delivered', 'cancelled'].includes(String(i.status))).reduce((acc, i) => acc + toNum(i.total_cost), 0),
+    active_stock: items.filter((i) => !activeStatuses.includes(String(i.status))).length,
+    stock_value: items.filter((i) => !activeStatuses.includes(String(i.status))).reduce((acc, i) => acc + toNum(i.total_cost), 0),
     sold_this_month: monthSales.length,
     profit_this_month: monthSales.reduce((a, s) => a + toNum(s.profit), 0),
     purchase_balance: calcPurchaseBalance(items),
@@ -483,7 +502,8 @@ function getAnalytics() {
   const sales = getValidSales();
   const monthly = {};
   sales.forEach((s) => {
-    const m = monthKey(s.sale_date || s.timestamp);
+    const m = monthKey(saleDateValue(s));
+    if (!m) return;
     if (!monthly[m]) monthly[m] = { sold_count: 0, revenue: 0, profit: 0, items: [] };
     monthly[m].sold_count += 1;
     monthly[m].revenue += toNum(s.sale_price);
@@ -509,8 +529,8 @@ function getAnalytics() {
 function getSalesByMonth(month) {
   const monthKeyValue = month || monthKey(new Date().toISOString());
   const sales = getValidSales()
-    .filter((s) => monthKey(s.sale_date || s.timestamp) === monthKeyValue)
-    .sort((a, b) => String(a.sale_date).localeCompare(String(b.sale_date)));
+    .filter((s) => monthKey(saleDateValue(s)) === monthKeyValue)
+    .sort((a, b) => String(saleDateValue(a)).localeCompare(String(saleDateValue(b))));
 
   return {
     month: monthKeyValue,
@@ -542,9 +562,44 @@ function getShippingOverview() {
 }
 
 function getQC() {
-  return getInventory().filter((i) => {
-    const noListing = boolText(i.listed_vinted) === 'no' && boolText(i.listed_vestiaire) === 'no';
-    const soldNoMoney = ['sold', 'shipped', 'delivered'].includes(String(i.status)) && boolText(i.money_received) === 'no';
-    return !i.photo_url || boolText(i.need_rephoto) === 'yes' || noListing || soldNoMoney || !String(i.notes || '').trim();
-  });
+  const reasonLabels = {
+    no_photo: 'Нет фото',
+    no_notes: 'Нет описания',
+    not_listed: 'Не выставлено ни на Vinted, ни на Vestiaire',
+    need_rephoto: 'Нужно перефото',
+    sold_no_money: 'Продано, но деньги не зашли',
+    sold_not_shipped: 'Продано, но еще не отправлено',
+    shipped_not_delivered: 'Отправлено, но не доставлено'
+  };
+
+  const soldStatuses = ['sold', 'shipped', 'delivered'];
+
+  return getInventory().reduce((acc, item) => {
+    const sold = soldStatuses.includes(String(item.status));
+    const sh = shippingStatus(item.shipping_status);
+    const checks = [
+      !item.photo_url ? 'no_photo' : '',
+      !String(item.notes || '').trim() ? 'no_notes' : '',
+      (!sold && boolText(item.listed_vinted) === 'no' && boolText(item.listed_vestiaire) === 'no') ? 'not_listed' : '',
+      boolText(item.need_rephoto) === 'yes' ? 'need_rephoto' : '',
+      (sold && boolText(item.money_received) === 'no') ? 'sold_no_money' : '',
+      (sold && sh === 'pending') ? 'sold_not_shipped' : '',
+      (sold && sh === 'shipped') ? 'shipped_not_delivered' : ''
+    ].filter(Boolean);
+
+    if (!checks.length) return acc;
+    checks.forEach((code) => {
+      acc.push({
+        item_number: item.item_number,
+        model_name: item.model_name,
+        status: item.status,
+        shipping_status: item.shipping_status,
+        money_received: item.money_received,
+        reason_code: code,
+        reason_label: reasonLabels[code] || code,
+        item: item
+      });
+    });
+    return acc;
+  }, []);
 }

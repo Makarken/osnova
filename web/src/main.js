@@ -46,6 +46,13 @@ const n = (v) => Number(v || 0);
 const boolText = (v) => ['true', '1', 'yes', 'да', 'y'].includes(String(v || '').toLowerCase()) ? 'yes' : 'no';
 const shippingLabel = (status) => (SHIPPING_META[status] || SHIPPING_META.pending).label;
 const formatDate = (v) => { if (!v) return '—'; const d = new Date(v); return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleDateString('ru-RU'); };
+const formatMonthRu = (month) => {
+  if (!month) return '—';
+  const d = new Date(`${month}-01T00:00:00`);
+  if (Number.isNaN(d.getTime())) return month;
+  const txt = d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  return txt.charAt(0).toUpperCase() + txt.slice(1);
+};
 
 
 const normalizePurchasePayload = (payload) => ({
@@ -125,37 +132,7 @@ function App() {
       setAnalytics(an || { monthly: {} });
       setAttention(qc.attention || []);
 
-      let sm = { month: salesMonth, items: [], summary: {} };
-      try {
-        sm = await api('getSalesByMonth', { month: salesMonth });
-      } catch (salesErr) {
-        if (!String(salesErr.message || '').includes('Unknown action: getSalesByMonth')) throw salesErr;
-        const fromItems = (i.items || [])
-          .filter((x) => String(x.sale_date || '').slice(0, 7) === salesMonth && Number(x.sale_price || 0) > 0)
-          .map((x) => ({
-            sale_id: x.sale_id || '',
-            item_number: x.item_number,
-            sale_date: x.sale_date,
-            sale_price: Number(x.sale_price || 0),
-            platform: x.platform || '',
-            total_cost: Number(x.total_cost || 0),
-            profit: Number(x.profit || 0),
-            money_received: x.money_received || 'no',
-            status: x.status || 'sold',
-            shipping_status: x.shipping_status || 'pending',
-            shipping_label_url: x.shipping_label_url || ''
-          }))
-          .sort((a, b) => String(a.sale_date || '').localeCompare(String(b.sale_date || '')));
-        sm = {
-          month: salesMonth,
-          items: fromItems,
-          summary: {
-            sold_count: fromItems.length,
-            revenue: fromItems.reduce((acc, x) => acc + Number(x.sale_price || 0), 0),
-            profit: fromItems.reduce((acc, x) => acc + Number(x.profit || 0), 0)
-          }
-        };
-      }
+      const sm = await api('getSalesByMonth', { month: salesMonth });
 
       setMonthSales(sm || { month: salesMonth, items: [], summary: {} });
 
@@ -276,13 +253,13 @@ function App() {
       ${!loading && page === 'inventory' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-3 grid grid-cols-1 gap-2 items-end"><div><label className="text-xs text-luxe-muted">Поиск</label><input className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="Номер или модель"/></div><div><label className="text-xs text-luxe-muted">Статус</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${statusFilter} onChange=${(e) => setStatusFilter(e.target.value)}><option value="all">Все</option>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></div></div>
       ${!filteredItems.length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">Склад пуст. Добавьте покупку через +</div>` : null}<div className="space-y-2">${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between items-start gap-2"><div><p className="font-semibold">№ товара: ${i.item_number || '—'}</p><p className="text-sm">Модель: ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">Категория: ${i.category || '—'}</p><p className="text-sm">Себестоимость: ${money(i.total_cost)}</p><p className="text-sm">Платформа: ${i.platform || '—'}</p><p className="text-sm">Цена продажи: ${n(i.sale_price) > 0 ? money(i.sale_price) : '—'}</p></div><div className="flex flex-col gap-1 items-end"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
 
-      ${!loading && page === 'sales' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4 flex flex-wrap items-end gap-3"><div><label className="text-xs text-luxe-muted">Месяц</label><input type="month" className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></div></div>
+      ${!loading && page === 'sales' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4 flex flex-wrap items-end gap-3"><div><label className="text-xs text-luxe-muted">Месяц</label><input type="month" className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></div><p className="text-sm text-luxe-muted">${formatMonthRu(monthSales.month || salesMonth)}</p></div>
       <div className="grid grid-cols-3 gap-3">${[['Продано', monthSales.summary?.sold_count || 0], ['Выручка', money(monthSales.summary?.revenue)], ['Прибыль', money(monthSales.summary?.profit)]].map(([t, v]) => html`<div className="premium-card rounded-2xl p-3"><p className="text-xs text-luxe-muted">${t}</p><p className="text-lg font-semibold">${v}</p></div>`)}</div>
-      ${!(monthSales.items || []).length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">За выбранный месяц продаж нет.</div>` : null}<div className="space-y-2">${(monthSales.items || []).map((s) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${s.sale_date || '—'} · ${money(s.sale_price)}</p></div><div className="flex flex-col gap-1 items-end"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}</div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`)}</div></section>`}
+      ${!(monthSales.items || []).length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">За выбранный месяц продаж нет.</div>` : null}<div className="space-y-2">${(monthSales.items || []).map((s) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${formatDate(s.sale_date || s.timestamp)} · ${money(s.sale_price)}</p></div><div className="flex flex-col gap-1 items-end"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}</div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`)}</div></section>`}
 
-      ${!loading && page === 'analytics' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Продажи по месяцам</h2><ul className="mt-2 text-sm space-y-2">${Object.entries(analytics.monthly || {}).sort(([a], [b]) => a.localeCompare(b)).map(([m, v]) => html`<li className="border-b border-luxe-border/60 pb-2"><div className="flex justify-between"><b>${m}</b><span>${v.sold_count} шт.</span></div><div className="text-luxe-muted">Выручка: ${money(v.revenue)} · Прибыль: ${money(v.profit)}</div></li>`)}</ul></div></section>`}
-      ${!loading && page === 'qc' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Контроль</h2><ul className="mt-2 text-sm list-disc list-inside">${attention.map((i) => html`<li>№ ${i.item_number} · ${i.model_name || '—'}</li>`)}</ul></section>`}
-      ${!loading && page === 'activity' && html`<section className="premium-card rounded-2xl p-4 overflow-auto"><table className="min-w-[760px] w-full text-sm"><thead><tr className="text-xs text-luxe-muted"><th className="text-left">Время</th><th>Номер</th><th>Действие</th></tr></thead><tbody>${activity.map((a) => html`<tr className="border-t border-luxe-border/60"><td className="py-2">${new Date(a.timestamp).toLocaleString('ru-RU')}</td><td>${a.item_number}</td><td>${a.action}</td></tr>`)}</tbody></table></section>`}
+      ${!loading && page === 'analytics' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Продажи по месяцам</h2><ul className="mt-2 text-sm space-y-2">${Object.entries(analytics.monthly || {}).sort(([a], [b]) => a.localeCompare(b)).map(([m, v]) => html`<li className="border-b border-luxe-border/60 pb-2"><div className="flex justify-between"><b>${formatMonthRu(m)}</b><span>${v.sold_count} шт.</span></div><div className="text-luxe-muted">Выручка: ${money(v.revenue)} · Прибыль: ${money(v.profit)}</div></li>`)}</ul></div></section>`}
+      ${!loading && page === 'qc' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Контроль</h2><ul className="mt-2 text-sm space-y-2">${attention.map((i) => html`<li className="border-b border-luxe-border/60 pb-2"><p><b>№ ${i.item_number}</b> · ${i.model_name || '—'}</p><p className="text-luxe-muted">Причина: ${i.reason_label || i.reason_code || '—'}</p></li>`)}</ul></section>`}
+      ${!loading && page === 'activity' && html`<section className="premium-card rounded-2xl p-4 overflow-auto"><table className="min-w-[760px] w-full text-sm"><thead><tr className="text-xs text-luxe-muted"><th className="text-left">Время</th><th>Номер</th><th>Действие</th><th className="text-left">Описание</th></tr></thead><tbody>${activity.map((a) => html`<tr className="border-t border-luxe-border/60"><td className="py-2">${new Date(a.timestamp).toLocaleString('ru-RU')}</td><td>${a.item_number}</td><td>${a.action}</td><td>${a.description || '—'}</td></tr>`)}</tbody></table></section>`}
       ${!loading && page === 'rephoto' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Товары на перефото</h2><p className="text-sm text-luxe-muted mt-1">Всего: ${rephotoItems.length}</p></div>${rephotoItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><p className="font-semibold">№${i.item_number} · ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">${i.category || '—'}</p><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</section>`}
       ${!loading && page === 'settings' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Настройки</h2><p className="mt-2 text-sm text-luxe-muted">API подключен через Apps Script URL из <code>src/config.js</code>.</p><button className="tap-btn mt-3 rounded-lg border border-luxe-border px-3 py-2 text-sm" onClick=${loadAll}>Обновить данные</button></section>`}
     </main>
