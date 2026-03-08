@@ -21,20 +21,21 @@ const CONFIG = {
   },
   HEADERS: {
     inventory: [
-      'item_number', 'photo_url', 'model_name', 'category', 'purchase_date', 'total_cost',
+      'item_number', 'photo_url', 'buyee_url', 'model_name', 'category', 'purchase_date',
+      'base_cost', 'shipping_japan', 'tax', 'shipping_spain', 'repair_cost', 'total_cost',
       'status', 'listed_vinted', 'listed_vestiaire', 'need_rephoto', 'money_received',
       'sale_id', 'sale_price', 'sale_date', 'platform', 'buyer', 'platform_fee', 'profit',
       'tracking_number', 'shipping_label_url', 'shipping_date', 'shipping_status',
       'notes', 'updated_at'
     ],
-    purchases: ['timestamp', 'item_number', 'model_name', 'purchase_date', 'total_cost', 'notes'],
+    purchases: ['timestamp', 'item_number', 'model_name', 'purchase_date', 'base_cost', 'shipping_japan', 'tax', 'shipping_spain', 'repair_cost', 'total_cost', 'notes'],
     sales: [
       'sale_id', 'timestamp', 'item_number', 'sale_date', 'sale_price', 'platform', 'buyer',
       'platform_fee', 'total_cost', 'profit', 'money_received', 'status', 'shipping_status',
       'tracking_number', 'shipping_label_url', 'shipping_date', 'pre_sale_status',
       'is_cancelled', 'cancelled_at', 'notes'
     ],
-    statistics: ['timestamp', 'active_stock', 'stock_value', 'sold_this_month', 'profit_this_month', 'purchase_balance', 'pending_shipping', 'in_transit'],
+    statistics: ['timestamp', 'active_stock', 'stock_value', 'sold_this_month', 'profit_this_month', 'profit_share_each', 'purchase_balance', 'pending_shipping', 'in_transit'],
     activity: ['timestamp', 'item_number', 'action', 'field', 'old_value', 'new_value', 'actor']
   },
   STATUS_LABELS: {
@@ -115,6 +116,12 @@ function getSheet(name, headers) {
     item_number: ['item_number', 'item_id'],
     model_name: ['model_name', 'model'],
     total_cost: ['total_cost', 'purchase_price'],
+    base_cost: ['base_cost', 'total_cost', 'purchase_price'],
+    shipping_japan: ['shipping_japan', 'delivery_japan', 'japan_shipping'],
+    tax: ['tax', 'nalog'],
+    shipping_spain: ['shipping_spain', 'delivery_spain', 'spain_shipping'],
+    repair_cost: ['repair_cost', 'repair'],
+    buyee_url: ['buyee_url', 'auction_url', 'source_url'],
     purchase_date: ['purchase_date'],
     status: ['status'],
     sale_price: ['sale_price'],
@@ -183,13 +190,41 @@ function updateSalesRow(saleId, updater) {
 }
 
 function toNum(v) { return Number(v || 0); }
-function monthKey(v) { return String(v || '').slice(0, 7); }
+function monthKey(v) {
+  const raw = String(v || '').trim();
+  if (!raw) return '';
+  const iso = raw.match(/^(\d{4})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}`;
+  const dot = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (dot) return `${dot[3]}-${dot[2]}`;
+  const d = new Date(raw);
+  if (!Number.isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return raw.slice(0, 7);
+}
 function boolText(v) {
   const s = String(v == null ? '' : v).trim().toLowerCase();
   return (s === 'true' || s === '1' || s === 'yes' || s === 'да' || s === 'y') ? 'yes' : 'no';
 }
 function shippingStatus(v) {
   return SHIPPING_STATUS[v] ? v : 'pending';
+}
+function calcTotalCost(input, prev) {
+  const p = prev || {};
+  const baseCost = toNum(input.base_cost != null ? input.base_cost : p.base_cost != null ? p.base_cost : p.total_cost);
+  const shippingJapan = toNum(input.shipping_japan != null ? input.shipping_japan : p.shipping_japan);
+  const tax = toNum(input.tax != null ? input.tax : p.tax);
+  const shippingSpain = toNum(input.shipping_spain != null ? input.shipping_spain : p.shipping_spain);
+  const repairCost = toNum(input.repair_cost != null ? input.repair_cost : p.repair_cost);
+  const explicit = input.total_cost != null ? toNum(input.total_cost) : null;
+  const computed = baseCost + shippingJapan + tax + shippingSpain + repairCost;
+  return {
+    base_cost: baseCost,
+    shipping_japan: shippingJapan,
+    tax: tax,
+    shipping_spain: shippingSpain,
+    repair_cost: repairCost,
+    total_cost: explicit != null && explicit > 0 ? explicit : computed
+  };
 }
 function isCancelledSale(s) {
   return boolText(s.is_cancelled) === 'yes' || String(s.shipping_status) === 'cancelled' || String(s.status) === 'cancelled';
@@ -220,13 +255,20 @@ function createSaleId(itemNumber) {
 
 function normalizeItem(input, prev) {
   const p = prev || {};
+  const costs = calcTotalCost(input, p);
   const item = {
     item_number: String(input.item_number != null ? input.item_number : p.item_number || '').trim(),
     photo_url: input.photo_url != null ? input.photo_url : (p.photo_url || ''),
+    buyee_url: input.buyee_url != null ? input.buyee_url : (p.buyee_url || ''),
     model_name: input.model_name != null ? input.model_name : (p.model_name || ''),
     category: input.category != null ? input.category : (p.category || ''),
     purchase_date: input.purchase_date != null ? input.purchase_date : (p.purchase_date || ''),
-    total_cost: toNum(input.total_cost != null ? input.total_cost : p.total_cost),
+    base_cost: costs.base_cost,
+    shipping_japan: costs.shipping_japan,
+    tax: costs.tax,
+    shipping_spain: costs.shipping_spain,
+    repair_cost: costs.repair_cost,
+    total_cost: costs.total_cost,
     status: input.status != null ? input.status : (p.status || 'purchased'),
     listed_vinted: boolText(input.listed_vinted != null ? input.listed_vinted : p.listed_vinted),
     listed_vestiaire: boolText(input.listed_vestiaire != null ? input.listed_vestiaire : p.listed_vestiaire),
@@ -301,6 +343,11 @@ function createPurchase(payload) {
     item_number: item.item_number,
     model_name: item.model_name,
     purchase_date: item.purchase_date,
+    base_cost: item.base_cost,
+    shipping_japan: item.shipping_japan,
+    tax: item.tax,
+    shipping_spain: item.shipping_spain,
+    repair_cost: item.repair_cost,
     total_cost: item.total_cost,
     notes: item.notes
   });
@@ -489,6 +536,7 @@ function getDashboard() {
     stock_value: items.filter((i) => !activeStatuses.includes(String(i.status))).reduce((acc, i) => acc + toNum(i.total_cost), 0),
     sold_this_month: monthSales.length,
     profit_this_month: monthSales.reduce((a, s) => a + toNum(s.profit), 0),
+    profit_share_each: monthSales.reduce((a, s) => a + toNum(s.profit), 0) / 3,
     purchase_balance: calcPurchaseBalance(items),
     pending_shipping: sales.filter((s) => shippingStatus(s.shipping_status) === 'pending').length,
     in_transit: sales.filter((s) => shippingStatus(s.shipping_status) === 'shipped').length

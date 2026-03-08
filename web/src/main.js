@@ -58,6 +58,11 @@ const formatMonthRu = (month) => {
 const normalizePurchasePayload = (payload) => ({
   ...payload,
   item_number: String(payload.item_number || '').trim(),
+  base_cost: Number(payload.base_cost || 0),
+  shipping_japan: Number(payload.shipping_japan || 0),
+  tax: Number(payload.tax || 0),
+  shipping_spain: Number(payload.shipping_spain || 0),
+  repair_cost: Number(payload.repair_cost || 0),
   total_cost: Number(payload.total_cost || 0)
 });
 
@@ -119,12 +124,13 @@ function App() {
     setLoading(true);
     setError('');
     try {
-      const [i, d, a, an, qc] = await Promise.all([
+      const [i, d, a, an, qc, sh] = await Promise.all([
         api('getInventory'),
         api('getDashboard'),
         api('getActivity'),
         api('getAnalytics'),
-        api('getQC')
+        api('getQC'),
+        api('getShippingOverview')
       ]);
       setItems(i.items || []);
       setDashboard(d.stats || {});
@@ -136,15 +142,7 @@ function App() {
 
       setMonthSales(sm || { month: salesMonth, items: [], summary: {} });
 
-      const shippingItems = (sm?.items || []).filter((x) => ['pending', 'shipped'].includes(String(x.shipping_status || 'pending')));
-      setShippingOverview({
-        summary: {
-          pending: (sm?.items || []).filter((x) => String(x.shipping_status || 'pending') === 'pending').length,
-          shipped: (sm?.items || []).filter((x) => String(x.shipping_status || '') === 'shipped').length,
-          delivered: (sm?.items || []).filter((x) => String(x.shipping_status || '') === 'delivered').length
-        },
-        items: shippingItems
-      });
+      setShippingOverview(sh || { summary: {}, items: [] });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -245,6 +243,7 @@ function App() {
         ['💰', 'Стоимость склада', money(dashboard.stock_value || 0)],
         ['✅', 'Продано в этом месяце', dashboard.sold_this_month || 0],
         ['💶', 'Прибыль за месяц', money(dashboard.profit_this_month)],
+        ['👥', 'На 1 человека', money(dashboard.profit_share_each)],
         ['📭', 'Не отправлено', shippingOverview.summary?.pending || 0],
         ['📦', 'В пути', shippingOverview.summary?.shipped || 0]
       ].map(([i, t, v]) => html`<div className="premium-card rounded-2xl p-4"><p className="text-xs text-luxe-muted">${i} ${t}</p><p className="text-lg font-semibold mt-1">${v}</p></div>`)}</div>
@@ -286,10 +285,16 @@ function PurchaseModal({ close, save }) {
   const [f, setF] = useState({
     item_number: '',
     photo_url: '',
+    buyee_url: '',
     model_name: '',
     category: 'Сумка',
     purchase_date: new Date().toISOString().slice(0, 10),
-    total_cost: '',
+    base_cost: '',
+    shipping_japan: '',
+    tax: '',
+    shipping_spain: '',
+    repair_cost: '',
+    total_cost: 0,
     status: 'purchased',
     listed_vinted: 'no',
     listed_vestiaire: 'no',
@@ -298,7 +303,8 @@ function PurchaseModal({ close, save }) {
     notes: ''
   });
   const [preview, setPreview] = useState('');
-  const invalid = !String(f.item_number).trim() || !String(f.model_name).trim() || n(f.total_cost) <= 0;
+  const computedTotal = n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost);
+  const invalid = !String(f.item_number).trim() || !String(f.model_name).trim() || computedTotal <= 0;
 
   const onPickPhoto = (e) => {
     const file = e.target.files?.[0];
@@ -312,16 +318,22 @@ function PurchaseModal({ close, save }) {
     reader.readAsDataURL(file);
   };
 
-  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); if (!invalid) save(f); }} className="max-w-2xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Покупка</h2><button type="button" onClick=${close}>✕</button></div>
+  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); if (!invalid) save({ ...f, total_cost: computedTotal }); }} className="max-w-2xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Покупка</h2><button type="button" onClick=${close}>✕</button></div>
     <div className="grid md:grid-cols-2 gap-2">
       <label className="text-xs">Номер товара<input className="w-full mt-1 rounded-xl border p-2" value=${f.item_number} onInput=${(e) => setF({ ...f, item_number: e.target.value })} placeholder="108"/></label>
       <label className="text-xs">Модель<input className="w-full mt-1 rounded-xl border p-2" value=${f.model_name} onInput=${(e) => setF({ ...f, model_name: e.target.value })}/></label>
       <label className="text-xs">Категория<select className="w-full mt-1 rounded-xl border p-2" value=${f.category} onChange=${(e) => setF({ ...f, category: e.target.value })}>${CATEGORY_OPTIONS.map((c) => html`<option value=${c}>${c}</option>`)}</select></label>
       <label className="text-xs">Дата покупки<input type="date" className="w-full mt-1 rounded-xl border p-2" value=${f.purchase_date} onInput=${(e) => setF({ ...f, purchase_date: e.target.value })}/></label>
-      <label className="text-xs">Себестоимость<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.total_cost} onInput=${(e) => setF({ ...f, total_cost: e.target.value })}/></label>
+      <label className="text-xs">Выкуп товара (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.base_cost} onInput=${(e) => setF({ ...f, base_cost: e.target.value })}/></label>
+      <label className="text-xs">Доставка с Японии (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_japan} onInput=${(e) => setF({ ...f, shipping_japan: e.target.value })}/></label>
+      <label className="text-xs">Налог (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.tax} onInput=${(e) => setF({ ...f, tax: e.target.value })}/></label>
+      <label className="text-xs">Доставка в Испанию (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_spain} onInput=${(e) => setF({ ...f, shipping_spain: e.target.value })}/></label>
+      <label className="text-xs">Ремонт (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.repair_cost} onInput=${(e) => setF({ ...f, repair_cost: e.target.value })}/></label>
+      <label className="text-xs">Себестоимость (авто)<input type="number" disabled className="w-full mt-1 rounded-xl border p-2 bg-slate-100" value=${computedTotal}/></label>
       <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => setF({ ...f, status: e.target.value })}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
     </div>
-    <div className="rounded-xl border border-luxe-border p-3 bg-white"><p className="text-sm font-medium">Фото товара</p><input type="file" accept="image/*" onChange=${onPickPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Выберите фото с телефона/компьютера.</p><label className="text-xs text-luxe-muted mt-2 block">(опционально) Вставьте ссылку с Buyee</label><input className="w-full mt-1 rounded-xl border p-2 text-sm" value=${f.photo_url} onInput=${(e) => setF({ ...f, photo_url: e.target.value })} placeholder="Вставьте ссылку с Buyee"/>${(preview || f.photo_url) ? html`<img src=${preview || f.photo_url} className="mt-2 h-28 rounded-lg object-cover"/>` : null}</div>
+    <div className="rounded-xl border border-luxe-border p-3 bg-white"><p className="text-sm font-medium">Фото товара</p><input type="file" accept="image/*" onChange=${onPickPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Выберите фото с телефона/компьютера.</p><label className="text-xs text-luxe-muted mt-2 block">Ссылка Buyee (опционально)</label><input className="w-full mt-1 rounded-xl border p-2 text-sm" value=${f.buyee_url} onInput=${(e) => setF({ ...f, buyee_url: e.target.value })} placeholder="https://buyee.jp/..."/>${(preview || f.photo_url) ? html`<img src=${preview || f.photo_url} className="mt-2 h-28 rounded-lg object-cover"/>` : null}</div>
+    <label className="text-xs inline-flex items-center gap-2"><input type="checkbox" checked=${boolText(f.need_rephoto) === 'yes'} onChange=${(e) => setF({ ...f, need_rephoto: e.target.checked ? 'yes' : 'no' })}/>Нужно перефото</label>
     <label className="text-xs block">Заметки<textarea className="w-full mt-1 rounded-xl border p-2" rows="2" value=${f.notes} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea></label>
     <button disabled=${invalid} className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-3 disabled:opacity-50">Сохранить покупку</button></form></div>`;
 }
@@ -437,11 +449,19 @@ function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, 
     reader.readAsDataURL(file);
   };
 
-  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); save(item.item_number, f); }} className="max-w-3xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Карточка № ${item.item_number}</h2><button type="button" onClick=${close}>✕</button></div>
-  <div className="grid md:grid-cols-2 gap-3"><img src=${f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-cover"/><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p><p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2"><button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
+  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); save(item.item_number, { ...f, total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }} className="max-w-3xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Карточка № ${item.item_number}</h2><button type="button" onClick=${close}>✕</button></div>
+  <div className="grid md:grid-cols-2 gap-3"><img src=${f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-cover"/><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2"><button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
   <div className="grid md:grid-cols-2 gap-2">
     <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => { setF({ ...f, status: e.target.value }); updateStatus(item.item_number, e.target.value); }}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
     <label className="text-xs">Статус доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_status || 'pending'} onChange=${(e) => setF({ ...f, shipping_status: e.target.value })}>${Object.keys(SHIPPING_META).map((s) => html`<option value=${s}>${shippingLabel(s)}</option>`)}</select></label>
+    <label className="text-xs">Выкуп товара (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.base_cost || 0} onInput=${(e) => setF({ ...f, base_cost: e.target.value, total_cost: n(e.target.value) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) })}/></label>
+    <label className="text-xs">Доставка с Японии (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_japan || 0} onInput=${(e) => setF({ ...f, shipping_japan: e.target.value, total_cost: n(f.base_cost) + n(e.target.value) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) })}/></label>
+    <label className="text-xs">Налог (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.tax || 0} onInput=${(e) => setF({ ...f, tax: e.target.value, total_cost: n(f.base_cost) + n(f.shipping_japan) + n(e.target.value) + n(f.shipping_spain) + n(f.repair_cost) })}/></label>
+    <label className="text-xs">Доставка в Испанию (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_spain || 0} onInput=${(e) => setF({ ...f, shipping_spain: e.target.value, total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(e.target.value) + n(f.repair_cost) })}/></label>
+    <label className="text-xs">Ремонт (€)<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.repair_cost || 0} onInput=${(e) => setF({ ...f, repair_cost: e.target.value, total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(e.target.value) })}/></label>
+    <label className="text-xs">Себестоимость (авто)<input disabled className="w-full mt-1 rounded-xl border p-2 bg-slate-100" value=${n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost)}/></label>
+    <label className="text-xs md:col-span-2">Ссылка Buyee<input className="w-full mt-1 rounded-xl border p-2" value=${f.buyee_url || ''} onInput=${(e) => setF({ ...f, buyee_url: e.target.value })} placeholder="https://buyee.jp/..."/></label>
+    <label className="text-xs inline-flex items-center gap-2 md:col-span-2"><input type="checkbox" checked=${boolText(f.need_rephoto) === 'yes'} onChange=${(e) => setF({ ...f, need_rephoto: e.target.checked ? 'yes' : 'no' })}/>Нужно перефото</label>
     <label className="text-xs">Дата отправки<input type="date" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_date || ''} onInput=${(e) => setF({ ...f, shipping_date: e.target.value })}/></label>
     <label className="text-xs">Трек-номер<input className="w-full mt-1 rounded-xl border p-2" value=${f.tracking_number || ''} onInput=${(e) => setF({ ...f, tracking_number: e.target.value })}/></label>
     <label className="text-xs md:col-span-2">Лейбл доставки<input className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_label_url || ''} onInput=${(e) => setF({ ...f, shipping_label_url: e.target.value })}/></label>
