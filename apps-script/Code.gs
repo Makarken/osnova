@@ -27,16 +27,16 @@ const CONFIG = {
       'status', 'listed_vinted', 'listed_vestiaire', 'need_rephoto', 'money_received',
       'sale_id', 'sale_price', 'sale_date', 'platform', 'buyer', 'platform_fee', 'profit',
       'tracking_number', 'shipping_label_url', 'shipping_date', 'shipping_status',
-      'notes', 'updated_at'
+      'repair_master', 'repair_sent_date', 'sold_storage_days', 'notes', 'updated_at'
     ],
     purchases: ['timestamp', 'item_number', 'model_name', 'purchase_date', 'base_cost', 'shipping_japan', 'tax', 'shipping_spain', 'repair_cost', 'total_cost', 'notes'],
     sales: [
-      'sale_id', 'timestamp', 'item_number', 'sale_date', 'sale_price', 'platform', 'buyer',
+      'sale_id', 'timestamp', 'item_number', 'model_name', 'sale_date', 'sale_price', 'platform', 'buyer',
       'platform_fee', 'total_cost', 'profit', 'money_received', 'status', 'shipping_status',
       'tracking_number', 'shipping_label_url', 'shipping_date', 'pre_sale_status',
-      'is_cancelled', 'cancelled_at', 'notes'
+      'sold_storage_days', 'is_cancelled', 'cancelled_at', 'notes'
     ],
-    statistics: ['timestamp', 'active_stock', 'stock_value', 'sold_this_month', 'profit_this_month', 'profit_share_each', 'purchase_balance', 'pending_shipping', 'in_transit'],
+    statistics: ['timestamp', 'active_stock', 'stock_value', 'sold_this_month', 'profit_this_month', 'profit_share_each', 'purchase_balance', 'pending_shipping', 'in_transit', 'attention_count', 'avg_sale_days', 'oldest_item_number', 'oldest_item_days'],
     activity: ['timestamp', 'item_number', 'action', 'field', 'old_value', 'new_value', 'actor'],
     settings: ['key', 'value']
   },
@@ -76,6 +76,7 @@ function routeAction(action, payload) {
     getDashboard: () => ({ ok: true, stats: getDashboard() }),
     getAnalytics: () => ({ ok: true, ...getAnalytics() }),
     getQC: () => ({ ok: true, attention: getQC() }),
+    getRepairs: () => ({ ok: true, ...getRepairs() }),
     getActivity: () => ({ ok: true, activity: getActivity() }),
     getSalesByMonth: () => ({ ok: true, ...getSalesByMonth(payload.month || payload.monthKey || '') }),
     getShippingOverview: () => ({ ok: true, ...getShippingOverview() }),
@@ -85,6 +86,10 @@ function routeAction(action, payload) {
     updateShipping: () => ({ ok: true, item: updateShipping(payload.item_number, payload.shipping || {}) }),
     updateMoneyReceived: () => ({ ok: true, item: updateMoneyReceived(payload.item_number, payload.money_received) }),
     updatePurchaseBalance: () => ({ ok: true, value: updatePurchaseBalanceManual(payload.value) }),
+    sendToRepair: () => ({ ok: true, item: sendToRepair(payload.item_number, payload.master_id || payload.master_name || '') }),
+    completeRepair: () => ({ ok: true, item: completeRepair(payload.item_number, payload.repair_cost) }),
+    addRepairMaster: () => ({ ok: true, masters: addRepairMaster(payload.name, payload.city) }),
+    deleteRepairMaster: () => ({ ok: true, masters: deleteRepairMaster(payload.id) }),
     deleteItem: () => ({ ok: true, deleted: deleteItem(payload.item_number) }),
     cancelSale: () => ({ ok: true, item: cancelSale(payload.item_number, payload.sale_id) }),
     updateStatus: () => ({ ok: true, item: updateStatus(payload.item_number, payload.status) }),
@@ -239,6 +244,23 @@ function monthKey(v) {
   if (!Number.isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   return raw.slice(0, 7);
 }
+function toDateSafe(v) {
+  const raw = String(v || '').trim();
+  if (!raw) return null;
+  const dot = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (dot) {
+    const d = new Date(`${dot[3]}-${dot[2]}-${dot[1]}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function diffDays(startDate, endDate) {
+  const s = toDateSafe(startDate);
+  const e = toDateSafe(endDate || new Date().toISOString().slice(0, 10));
+  if (!s || !e) return 0;
+  return Math.max(0, Math.floor((e.getTime() - s.getTime()) / 86400000));
+}
 function boolText(v) {
   const s = String(v == null ? '' : v).trim().toLowerCase();
   return (s === 'true' || s === '1' || s === 'yes' || s === 'да' || s === 'y') ? 'yes' : 'no';
@@ -323,9 +345,15 @@ function normalizeItem(input, prev) {
     shipping_label_url: cellText(input.shipping_label_url != null ? input.shipping_label_url : (p.shipping_label_url || '')),
     shipping_date: input.shipping_date != null ? input.shipping_date : (p.shipping_date || ''),
     shipping_status: shippingStatus(input.shipping_status != null ? input.shipping_status : p.shipping_status),
+    repair_master: input.repair_master != null ? input.repair_master : (p.repair_master || ''),
+    repair_sent_date: input.repair_sent_date != null ? input.repair_sent_date : (p.repair_sent_date || ''),
+    sold_storage_days: toNum(input.sold_storage_days != null ? input.sold_storage_days : p.sold_storage_days),
     notes: cellText(input.notes != null ? input.notes : (p.notes || '')),
     updated_at: new Date().toISOString()
   };
+  if (item.sale_date && toNum(item.sale_price) > 0) {
+    item.sold_storage_days = diffDays(item.purchase_date, item.sale_date);
+  }
   item.profit = item.sale_price ? (item.sale_price - item.total_cost - item.platform_fee) : 0;
   return item;
 }
@@ -402,6 +430,7 @@ function editItem(itemNumber, updates) {
   if (current.sale_id) {
     updateSalesRow(current.sale_id, (sale) => ({
       ...sale,
+      model_name: next.model_name,
       sale_date: next.sale_date,
       sale_price: next.sale_price,
       platform: next.platform,
@@ -413,6 +442,7 @@ function editItem(itemNumber, updates) {
       tracking_number: next.tracking_number,
       shipping_label_url: next.shipping_label_url,
       shipping_date: next.shipping_date,
+      sold_storage_days: next.sold_storage_days,
       notes: next.notes
     }));
   }
@@ -457,6 +487,7 @@ function recordSale(payload) {
     sale_id: saleId,
     timestamp: new Date().toISOString(),
     item_number: next.item_number,
+    model_name: next.model_name,
     sale_date: next.sale_date,
     sale_price: next.sale_price,
     platform: next.platform,
@@ -471,6 +502,7 @@ function recordSale(payload) {
     shipping_label_url: next.shipping_label_url,
     shipping_date: next.shipping_date,
     pre_sale_status: current.status || 'listed',
+    sold_storage_days: next.sold_storage_days,
     is_cancelled: 'no',
     cancelled_at: '',
     notes: next.notes
@@ -538,15 +570,82 @@ function updateMoneyReceived(itemNumber, value) {
 }
 
 function updatePurchaseBalanceManual(value) {
-  const purchases = getRows(CONFIG.SHEETS.purchases, CONFIG.HEADERS.purchases);
-  const sales = getValidSales();
-  const spent = purchases.reduce((acc, p) => acc + toNum(p.total_cost), 0);
-  const returned = sales
-    .filter((s) => boolText(s.money_received) === 'yes')
-    .reduce((acc, s) => acc + toNum(s.total_cost), 0);
-  const base = returned - spent;
   const target = toNum(value);
-  return setSettingValue('purchase_balance_manual', target - base);
+  setSettingValue('purchase_balance_base', target);
+  setSettingValue('purchase_balance_base_at', new Date().toISOString());
+  return target;
+}
+
+function getRepairMasters() {
+  const raw = String(getSettingValue('repair_masters', ''));
+  if (!raw) {
+    return [
+      { id: 'polina-dnipro', name: 'Полина', city: 'Днепр' },
+      { id: 'spain-watchmaker', name: 'Испания', city: 'часовщик' },
+      { id: 'kharkiv-types', name: 'Харьковские типы', city: '' }
+    ];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveRepairMasters(masters) {
+  setSettingValue('repair_masters', JSON.stringify(masters || []));
+  return masters;
+}
+
+function addRepairMaster(name, city) {
+  const n = String(name || '').trim();
+  if (!n) throw new Error('Введите имя мастера');
+  const c = String(city || '').trim();
+  const masters = getRepairMasters();
+  masters.push({ id: `m-${new Date().getTime()}`, name: n, city: c });
+  return saveRepairMasters(masters);
+}
+
+function deleteRepairMaster(id) {
+  const target = String(id || '').trim();
+  if (!target) throw new Error('Не передан id мастера');
+  return saveRepairMasters(getRepairMasters().filter((m) => String(m.id) !== target));
+}
+
+function sendToRepair(itemNumber, masterIdOrName) {
+  const current = getItemByNumber(itemNumber);
+  if (!current) throw new Error('Товар не найден');
+  const masters = getRepairMasters();
+  const found = masters.find((m) => String(m.id) === String(masterIdOrName) || String(m.name) === String(masterIdOrName));
+  const masterName = found ? `${found.name}${found.city ? ` (${found.city})` : ''}` : String(masterIdOrName || '').trim();
+  if (!masterName) throw new Error('Выберите мастера');
+  const next = normalizeItem({ status: 'repair', repair_master: masterName, repair_sent_date: new Date().toISOString().slice(0, 10) }, current);
+  updateInventoryRow(itemNumber, next);
+  addActivity({ item_number: itemNumber, action: 'Отправлено в ремонт', field: 'repair_master', old_value: current.repair_master || '—', new_value: masterName });
+  return next;
+}
+
+function completeRepair(itemNumber, repairCost) {
+  const current = getItemByNumber(itemNumber);
+  if (!current) throw new Error('Товар не найден');
+  const next = normalizeItem({
+    repair_cost: toNum(repairCost),
+    status: 'ready',
+    repair_master: '',
+    repair_sent_date: ''
+  }, current);
+  updateInventoryRow(itemNumber, next);
+  addActivity({ item_number: itemNumber, action: 'Ремонт выполнен', field: 'repair_cost', old_value: String(current.repair_cost || 0), new_value: String(next.repair_cost || 0) });
+  return next;
+}
+
+function getRepairs() {
+  const items = getInventory().filter((i) => String(i.status) === 'repair');
+  return {
+    masters: getRepairMasters(),
+    items: items.map((i) => ({ ...i, repair_days: diffDays(i.repair_sent_date || i.updated_at, new Date().toISOString().slice(0, 10)) }))
+  };
 }
 
 function deleteItem(itemNumber) {
@@ -619,12 +718,16 @@ function getActivity() {
 }
 
 function calcPurchaseBalance(purchases, sales) {
-  const spent = purchases.reduce((acc, p) => acc + toNum(p.total_cost), 0);
+  const baseValue = toNum(getSettingValue('purchase_balance_base', 0));
+  const baseAt = String(getSettingValue('purchase_balance_base_at', '') || '');
+  const purchasesAfterBase = baseAt ? purchases.filter((p) => String(p.timestamp || '') >= baseAt) : purchases;
+  const salesAfterBase = baseAt ? sales.filter((s) => String(s.timestamp || '') >= baseAt) : sales;
+  const spent = purchasesAfterBase.reduce((acc, p) => acc + toNum(p.total_cost), 0);
   const returned = sales
+    .filter((s) => !baseAt || String(s.timestamp || '') >= baseAt)
     .filter((s) => boolText(s.money_received) === 'yes')
     .reduce((acc, s) => acc + toNum(s.total_cost), 0);
-  const manual = toNum(getSettingValue('purchase_balance_manual', 0));
-  return returned - spent + manual;
+  return baseValue + returned - spent;
 }
 
 function getDashboard() {
@@ -635,15 +738,27 @@ function getDashboard() {
   const monthSales = sales.filter((s) => monthKey(saleDateValue(s)) === currentMonth);
   const activeStatuses = ['sold', 'shipped', 'delivered', 'cancelled'];
 
+  const attention = getQC();
+  const soldWithDays = sales.filter((s) => toNum(s.sold_storage_days) > 0);
+  const activeStock = items.filter((i) => !activeStatuses.includes(String(i.status)));
+  const oldest = activeStock
+    .map((i) => ({ item_number: i.item_number, days: diffDays(i.purchase_date, new Date().toISOString().slice(0, 10)), model_name: i.model_name }))
+    .sort((a, b) => b.days - a.days)[0] || { item_number: '', days: 0, model_name: '' };
+
   const stats = {
-    active_stock: items.filter((i) => !activeStatuses.includes(String(i.status))).length,
-    stock_value: items.filter((i) => !activeStatuses.includes(String(i.status))).reduce((acc, i) => acc + toNum(i.total_cost), 0),
+    active_stock: activeStock.length,
+    stock_value: activeStock.reduce((acc, i) => acc + toNum(i.total_cost), 0),
     sold_this_month: monthSales.length,
     profit_this_month: monthSales.reduce((a, s) => a + toNum(s.profit), 0),
     profit_share_each: monthSales.reduce((a, s) => a + toNum(s.profit), 0) / 3,
     purchase_balance: calcPurchaseBalance(purchases, sales),
     pending_shipping: sales.filter((s) => shippingStatus(s.shipping_status) === 'pending').length,
-    in_transit: sales.filter((s) => shippingStatus(s.shipping_status) === 'shipped').length
+    in_transit: sales.filter((s) => shippingStatus(s.shipping_status) === 'shipped').length,
+    attention_count: attention.length,
+    avg_sale_days: soldWithDays.length ? soldWithDays.reduce((a, s) => a + toNum(s.sold_storage_days), 0) / soldWithDays.length : 0,
+    oldest_item_number: oldest.item_number,
+    oldest_item_model: oldest.model_name,
+    oldest_item_days: oldest.days
   };
 
   appendRow(CONFIG.SHEETS.statistics, CONFIG.HEADERS.statistics, { timestamp: new Date().toISOString(), ...stats });
@@ -663,9 +778,11 @@ function getAnalytics() {
     monthly[m].items.push({
       sale_id: s.sale_id,
       item_number: s.item_number,
+      model_name: s.model_name,
       total_cost: toNum(s.total_cost),
       sale_price: toNum(s.sale_price),
       profit: toNum(s.profit),
+      profit_percent: toNum(s.total_cost) ? ((toNum(s.profit) / toNum(s.total_cost)) * 100) : 0,
       sale_date: s.sale_date,
       platform: s.platform,
       money_received: s.money_received,
@@ -686,7 +803,7 @@ function getSalesByMonth(month) {
 
   return {
     month: monthKeyValue,
-    items: sales,
+    items: sales.map((s) => ({ ...s, profit_percent: toNum(s.total_cost) ? ((toNum(s.profit) / toNum(s.total_cost)) * 100) : 0 })),
     summary: {
       sold_count: sales.length,
       revenue: sales.reduce((a, x) => a + toNum(x.sale_price), 0),
@@ -721,7 +838,9 @@ function getQC() {
     need_rephoto: 'Нужно перефото',
     sold_no_money: 'Продано, но деньги не зашли',
     sold_not_shipped: 'Продано, но еще не отправлено',
-    shipped_not_delivered: 'Отправлено, но не доставлено'
+    shipped_not_delivered: 'Отправлено, но не доставлено',
+    repair_too_long: 'В ремонте более 14 дней',
+    stale_stock: 'Товар долго не продаётся'
   };
 
   const soldStatuses = ['sold', 'shipped', 'delivered'];
@@ -734,6 +853,8 @@ function getQC() {
       !String(item.notes || '').trim() ? 'no_notes' : '',
       (!sold && boolText(item.listed_vinted) === 'no' && boolText(item.listed_vestiaire) === 'no') ? 'not_listed' : '',
       boolText(item.need_rephoto) === 'yes' ? 'need_rephoto' : '',
+      (String(item.status) === 'repair' && diffDays(item.repair_sent_date || item.updated_at, new Date().toISOString().slice(0, 10)) > 14) ? 'repair_too_long' : '',
+      (!sold && diffDays(item.purchase_date, new Date().toISOString().slice(0, 10)) > 90) ? 'stale_stock' : '',
       (sold && boolText(item.money_received) === 'no') ? 'sold_no_money' : '',
       (sold && sh === 'pending') ? 'sold_not_shipped' : '',
       (sold && sh === 'shipped') ? 'shipped_not_delivered' : ''
@@ -749,6 +870,7 @@ function getQC() {
         money_received: item.money_received,
         reason_code: code,
         reason_label: reasonLabels[code] || code,
+        photo_url: item.photo_url,
         item: item
       });
     });

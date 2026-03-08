@@ -33,6 +33,7 @@ const BOTTOM_PAGES = [
 const MENU_PAGES = [
   ['analytics', 'Аналитика', '📈'],
   ['qc', 'Контроль', '⚠️'],
+  ['repair', 'Ремонт', '🔧'],
   ['activity', 'История', '📑'],
   ['rephoto', 'Перефото', '📸'],
   ['settings', 'Настройки', '⚙️']
@@ -53,6 +54,18 @@ const formatMonthRu = (month) => {
   if (Number.isNaN(d.getTime())) return month;
   const txt = d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
   return txt.charAt(0).toUpperCase() + txt.slice(1);
+};
+const daysOnStock = (purchaseDate, endDate = '') => {
+  const s = new Date(purchaseDate || '');
+  const e = new Date(endDate || new Date().toISOString().slice(0, 10));
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return 0;
+  return Math.max(0, Math.floor((e.getTime() - s.getTime()) / 86400000));
+};
+const stockAgeCls = (days) => {
+  if (days > 90) return 'text-red-700';
+  if (days > 60) return 'text-orange-600';
+  if (days > 30) return 'text-yellow-700';
+  return 'text-slate-700';
 };
 
 
@@ -174,25 +187,29 @@ function App() {
   const [inventoryView, setInventoryView] = useState('list');
   const [salesView, setSalesView] = useState('list');
   const [analyticsYear, setAnalyticsYear] = useState(new Date().getFullYear());
+  const [analyticsType, setAnalyticsType] = useState('monthly');
   const [purchaseBalanceInput, setPurchaseBalanceInput] = useState('0');
+  const [repairData, setRepairData] = useState({ items: [], masters: [] });
 
   const loadAll = async () => {
     setLoading(true);
     setError('');
     try {
-      const [i, d, a, an, qc, sh] = await Promise.all([
+      const [i, d, a, an, qc, sh, rep] = await Promise.all([
         api('getInventory'),
         api('getDashboard'),
         api('getActivity'),
         api('getAnalytics'),
         api('getQC'),
-        api('getShippingOverview')
+        api('getShippingOverview'),
+        api('getRepairs')
       ]);
       setItems(i.items || []);
       setDashboard(d.stats || {});
       setActivity(a.activity || []);
       setAnalytics(an || { monthly: {} });
       setAttention(qc.attention || []);
+      setRepairData(rep || { items: [], masters: [] });
 
       const sm = await api('getSalesByMonth', { month: salesMonth });
 
@@ -231,6 +248,10 @@ function App() {
     profit: analyticsYearSeries.reduce((a, x) => a + x.profit, 0),
     share_each: analyticsYearSeries.reduce((a, x) => a + x.profit, 0) / 3
   }), [analyticsYearSeries]);
+  const monthlyAnalytics = useMemo(() => {
+    const m = analytics.monthly?.[salesMonth] || { items: [], sold_count: 0, revenue: 0, profit: 0 };
+    return m;
+  }, [analytics, salesMonth]);
 
   const humanError = (err, fallback) => {
     const msg = String(err?.message || '').trim();
@@ -306,6 +327,34 @@ function App() {
     setToast('Остаток закупа обновлён');
     loadAll();
   };
+  const sendToRepair = async (itemNumber) => {
+    const options = (repairData.masters || []).map((m) => `${m.id}: ${m.name}${m.city ? ` (${m.city})` : ''}`).join('\n');
+    const selectedMaster = window.prompt(`Введите id мастера:\n${options}`);
+    if (!selectedMaster) return;
+    await api('sendToRepair', { item_number: itemNumber, master_id: selectedMaster });
+    setToast('Товар отправлен в ремонт');
+    loadAll();
+  };
+  const completeRepair = async (itemNumber) => {
+    const value = window.prompt('Введите стоимость ремонта (€)', '0');
+    if (value == null) return;
+    await api('completeRepair', { item_number: itemNumber, repair_cost: Number(value || 0) });
+    setToast('Ремонт завершен');
+    loadAll();
+  };
+  const addMaster = async () => {
+    const name = window.prompt('Имя мастера');
+    if (!name) return;
+    const city = window.prompt('Город мастера', '') || '';
+    await api('addRepairMaster', { name, city });
+    setToast('Мастер добавлен');
+    loadAll();
+  };
+  const deleteMaster = async (id) => {
+    await api('deleteRepairMaster', { id });
+    setToast('Мастер удален');
+    loadAll();
+  };
 
   const openFromMenu = (nextPage) => {
     setPage(nextPage);
@@ -333,21 +382,27 @@ function App() {
         ['👥', 'На 1 человека', money(dashboard.profit_share_each)],
         ['🏦', 'Остаток закупа', money(dashboard.purchase_balance || 0)],
         ['📭', 'Не отправлено', shippingOverview.summary?.pending || 0],
-        ['📦', 'В пути', shippingOverview.summary?.shipped || 0]
+        ['📦', 'В пути', shippingOverview.summary?.shipped || 0],
+        ['⚠️', 'Требуют внимания', dashboard.attention_count || 0],
+        ['⏱️', 'Средний срок продажи', `${Math.round(Number(dashboard.avg_sale_days || 0))} дн.`],
+        ['🧭', 'Самый старый товар', dashboard.oldest_item_number ? `№${dashboard.oldest_item_number} · ${dashboard.oldest_item_days || 0} дн.` : '—']
       ].map(([i, t, v]) => html`<div className="premium-card rounded-2xl p-4"><p className="text-xs text-luxe-muted">${i} ${t}</p><p className="text-lg font-semibold mt-1">${v}</p></div>`)}</div>
       <div className="premium-card rounded-2xl p-4"><p className="text-sm font-medium">Ручная корректировка остатка закупа</p><div className="mt-2 flex gap-2"><input type="number" className="rounded-xl border border-luxe-border p-2 bg-white w-44" value=${purchaseBalanceInput} onInput=${(e) => setPurchaseBalanceInput(e.target.value)}/><button className="tap-btn rounded-xl border border-luxe-border px-3 py-2" onClick=${savePurchaseBalance}>Сохранить</button></div></div>
       <div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Ожидают отправки / доставки</h2><ul className="mt-2 text-sm space-y-2">${(shippingOverview.items || []).slice(0, 7).map((s) => html`<li className="border-b border-luxe-border/60 pb-2">№${s.item_number} · ${s.platform || '—'} · ${formatDate(s.sale_date)} · <${ShippingBadge} status=${s.shipping_status}/></li>`)}</ul></div></section>`}
 
       ${!loading && page === 'inventory' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-3 grid grid-cols-1 md:grid-cols-3 gap-2 items-end"><div className="md:col-span-2"><label className="text-xs text-luxe-muted">Поиск</label><input className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="Номер или модель"/></div><div><label className="text-xs text-luxe-muted">Статус</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${statusFilter} onChange=${(e) => setStatusFilter(e.target.value)}><option value="all">Все</option>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></div><div><label className="text-xs text-luxe-muted">Вид</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${inventoryView} onChange=${(e) => setInventoryView(e.target.value)}><option value="list">Списком</option><option value="grid-sm">Плитка маленькая</option><option value="grid-lg">Плитка большая</option></select></div></div>
       ${!filteredItems.length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">Склад пуст. Добавьте покупку через +</div>` : null}
-      <div className=${inventoryView === 'list' ? 'space-y-2' : inventoryView === 'grid-sm' ? 'grid grid-cols-2 md:grid-cols-4 gap-2' : 'grid grid-cols-1 md:grid-cols-2 gap-3'}>${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className=${inventoryView === 'list' ? 'flex justify-between items-start gap-2' : 'space-y-2'}><div><img src=${i.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=300'} className=${inventoryView === 'grid-sm' ? 'h-24 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2' : inventoryView === 'grid-lg' ? 'h-36 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2' : 'h-16 w-16 rounded-lg object-contain bg-white border border-luxe-border mb-2'}/><p className="font-semibold">№ товара: ${i.item_number || '—'}</p><p className="text-sm">Модель: ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">Категория: ${i.category || '—'}</p><p className="text-sm">Себестоимость: ${money(i.total_cost)}</p><p className="text-sm">Платформа: ${i.platform || '—'}</p><p className="text-sm">Цена продажи: ${n(i.sale_price) > 0 ? money(i.sale_price) : '—'}</p></div><div className="flex ${inventoryView === 'list' ? 'flex-col items-end' : 'flex-row'} gap-1"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
+      <div className=${inventoryView === 'list' ? 'space-y-2' : inventoryView === 'grid-sm' ? 'grid grid-cols-2 md:grid-cols-4 gap-2' : 'grid grid-cols-1 md:grid-cols-2 gap-3'}>${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className=${inventoryView === 'list' ? 'flex justify-between items-start gap-2' : 'space-y-2'}><div><img src=${i.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=300'} className=${inventoryView === 'grid-sm' ? 'h-24 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2' : inventoryView === 'grid-lg' ? 'h-36 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2' : 'h-16 w-16 rounded-lg object-contain bg-white border border-luxe-border mb-2'}/><p className="font-semibold">№ товара: ${i.item_number || '—'}</p><p className="text-sm">Модель: ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">Категория: ${i.category || '—'}</p><p className="text-sm">Себестоимость: ${money(i.total_cost)}</p><p className=${`text-sm ${stockAgeCls(daysOnStock(i.purchase_date))}`}>Дней на складе: ${daysOnStock(i.purchase_date, i.sale_date || '')}</p><p className="text-sm">Платформа: ${i.platform || '—'}</p><p className="text-sm">Цена продажи: ${n(i.sale_price) > 0 ? money(i.sale_price) : '—'}</p></div><div className="flex ${inventoryView === 'list' ? 'flex-col items-end' : 'flex-row'} gap-1"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
 
       ${!loading && page === 'sales' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4 flex flex-wrap items-end gap-3"><div><label className="text-xs text-luxe-muted">Месяц</label><input type="month" className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></div><div><label className="text-xs text-luxe-muted">Вид</label><select className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesView} onChange=${(e) => setSalesView(e.target.value)}><option value="list">Списком</option><option value="grid-sm">Плитка маленькая</option><option value="grid-lg">Плитка большая</option></select></div><p className="text-sm text-luxe-muted">${formatMonthRu(monthSales.month || salesMonth)}</p></div>
       <div className="grid grid-cols-3 gap-3">${[['Продано', monthSales.summary?.sold_count || 0], ['Выручка', money(monthSales.summary?.revenue)], ['Прибыль', money(monthSales.summary?.profit)]].map(([t, v]) => html`<div className="premium-card rounded-2xl p-3"><p className="text-xs text-luxe-muted">${t}</p><p className="text-lg font-semibold">${v}</p></div>`)}</div>
       ${!(monthSales.items || []).length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">За выбранный месяц продаж нет.</div>` : null}<div className=${salesView === 'list' ? 'space-y-2' : salesView === 'grid-sm' ? 'grid grid-cols-2 md:grid-cols-4 gap-2' : 'grid grid-cols-1 md:grid-cols-2 gap-3'}>${(monthSales.items || []).map((s) => { const item = items.find((x) => String(x.item_number) === String(s.item_number)) || null; const cost = n(s.total_cost); const markup = cost > 0 ? ((n(s.sale_price) - cost) / cost) * 100 : 0; return html`<article className="premium-card rounded-2xl p-3"><div className=${salesView === 'list' ? 'flex justify-between gap-2' : 'space-y-2'}><div><img src=${item?.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=300'} className=${salesView === 'grid-sm' ? 'h-24 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2 cursor-pointer' : salesView === 'grid-lg' ? 'h-36 w-full rounded-lg object-contain bg-white border border-luxe-border mb-2 cursor-pointer' : 'h-14 w-14 rounded-lg object-contain bg-white border border-luxe-border mb-2 cursor-pointer'} onClick=${() => item ? setSelected(item) : null}/><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${formatDate(s.sale_date || s.timestamp)} · Покупка: ${money(cost)}</p><p className="text-sm">Продажа: <b>${money(s.sale_price)}</b> · Прибыль: <b>${money(s.profit)}</b> · Накрутка: <b>${pct(markup)}</b></p></div><div className="flex ${salesView === 'list' ? 'flex-col items-end' : 'flex-row'} gap-1"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}<label className="text-xs inline-flex items-center gap-1"><input type="checkbox" checked=${boolText(s.money_received) === 'yes'} onChange=${(e) => toggleMoneyReceived(s.item_number, e.target.checked)}/>Зашли деньги</label></div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`; })}</div></section>`}
 
-      ${!loading && page === 'analytics' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><div className="flex items-end justify-between gap-2"><h2 className="font-semibold">Аналитика</h2><label className="text-xs text-luxe-muted">Год<select className="ml-2 rounded-lg border border-luxe-border p-1 bg-white" value=${analyticsYear} onChange=${(e) => setAnalyticsYear(Number(e.target.value))}>${Array.from(new Set(Object.keys(analytics.monthly || {}).map((k) => Number(String(k).slice(0,4))).filter(Boolean))).sort((a,b)=>b-a).map((y) => html`<option value=${y}>${y}</option>`)}</select></label></div><div className="grid md:grid-cols-4 gap-2 mt-3"><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Продано за год</p><p className="text-lg font-semibold">${analyticsYearTotals.sold_count}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Выручка за год</p><p className="text-lg font-semibold">${money(analyticsYearTotals.revenue)}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Прибыль за год</p><p className="text-lg font-semibold">${money(analyticsYearTotals.profit)}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">На 1 человека за год</p><p className="text-lg font-semibold">${money(analyticsYearTotals.share_each)}</p></div></div><div className="mt-3"><${AnalyticsChart} series=${analyticsYearSeries}/></div><h3 className="font-medium mt-4">Продажи по месяцам</h3><ul className="mt-2 text-sm space-y-2">${analyticsYearSeries.map((v) => html`<li className="border-b border-luxe-border/60 pb-2"><div className="flex justify-between"><b>${formatMonthRu(v.month)}</b><span>${v.sold_count} шт.</span></div><div className="text-luxe-muted">Выручка: ${money(v.revenue)} · Прибыль: ${money(v.profit)}</div></li>`)}</ul></div></section>`}
-      ${!loading && page === 'qc' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Контроль</h2><ul className="mt-2 text-sm space-y-2">${attention.map((i) => html`<li className="border-b border-luxe-border/60 pb-2"><p><b>№ ${i.item_number}</b> · ${i.model_name || '—'}</p><p className="text-luxe-muted">Причина: ${i.reason_label || i.reason_code || '—'}</p></li>`)}</ul></section>`}
+      ${!loading && page === 'analytics' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><div className="flex flex-wrap items-end justify-between gap-2"><h2 className="font-semibold">Аналитика</h2><div className="flex gap-2"><button className=${`tap-btn rounded-lg px-3 py-1 border ${analyticsType === 'monthly' ? 'bg-luxe-accent text-white border-luxe-accent' : 'border-luxe-border'}`} onClick=${() => setAnalyticsType('monthly')}>Месячная</button><button className=${`tap-btn rounded-lg px-3 py-1 border ${analyticsType === 'yearly' ? 'bg-luxe-accent text-white border-luxe-accent' : 'border-luxe-border'}`} onClick=${() => setAnalyticsType('yearly')}>Годовая</button></div></div>
+      ${analyticsType === 'monthly' ? html`<div className="mt-3 space-y-3"><label className="text-xs text-luxe-muted">Месяц<input type="month" className="ml-2 rounded-lg border border-luxe-border p-1 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></label><div className="overflow-auto"><table className="min-w-[760px] w-full text-sm"><thead><tr className="text-xs text-luxe-muted"><th className="text-left">№</th><th className="text-left">Модель</th><th>Цена продажи</th><th>Себестоимость</th><th>Прибыль</th><th>% прибыли</th></tr></thead><tbody>${(monthlyAnalytics.items || []).map((row, idx) => html`<tr className="border-t border-luxe-border/60"><td className="py-2">${idx + 1}</td><td>${row.model_name || '—'}</td><td className="text-center">${money(row.sale_price)}</td><td className="text-center">${money(row.total_cost)}</td><td className="text-center">${money(row.profit)}</td><td className="text-center">${pct(row.profit_percent)}</td></tr>`)}</tbody></table></div><div className="grid md:grid-cols-4 gap-2"><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Продано товаров</p><p className="text-lg font-semibold">${monthlyAnalytics.sold_count || 0}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Сумма продаж</p><p className="text-lg font-semibold">${money(monthlyAnalytics.revenue || 0)}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Общая прибыль</p><p className="text-lg font-semibold">${money(monthlyAnalytics.profit || 0)}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Прибыль на 1 человека</p><p className="text-lg font-semibold">${money((monthlyAnalytics.profit || 0) / 3)}</p></div></div></div>` : html`<div className="mt-3"><label className="text-xs text-luxe-muted">Год<select className="ml-2 rounded-lg border border-luxe-border p-1 bg-white" value=${analyticsYear} onChange=${(e) => setAnalyticsYear(Number(e.target.value))}>${Array.from(new Set(Object.keys(analytics.monthly || {}).map((k) => Number(String(k).slice(0,4))).filter(Boolean))).sort((a,b)=>b-a).map((y) => html`<option value=${y}>${y}</option>`)}</select></label><div className="overflow-auto mt-2"><table className="min-w-[420px] w-full text-sm"><thead><tr className="text-xs text-luxe-muted"><th className="text-left">Месяц</th><th>Продажи</th><th>Прибыль</th></tr></thead><tbody>${analyticsYearSeries.map((v) => html`<tr className="border-t border-luxe-border/60"><td className="py-2">${formatMonthRu(v.month)}</td><td className="text-center">${v.sold_count}</td><td className="text-center">${money(v.profit)}</td></tr>`)}</tbody></table></div><div className="mt-3"><${AnalyticsChart} series=${analyticsYearSeries.map((x) => ({ ...x, revenue: 0 }))}/></div><div className="grid md:grid-cols-2 gap-2 mt-3"><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Общая прибыль за год</p><p className="text-lg font-semibold">${money(analyticsYearTotals.profit)}</p></div><div className="rounded-xl border border-luxe-border p-3"><p className="text-xs text-luxe-muted">Средняя прибыль в месяц</p><p className="text-lg font-semibold">${money((analyticsYearTotals.profit || 0) / Math.max(1, analyticsYearSeries.length || 1))}</p></div></div></div>`}
+      </div></section>`}
+      ${!loading && page === 'qc' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Контроль</h2><ul className="mt-2 text-sm space-y-2">${attention.map((i) => html`<li className="border-b border-luxe-border/60 pb-2"><button className="w-full text-left" onClick=${() => setSelected(i.item)}><div className="flex gap-2"><img src=${i.photo_url || i.item?.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=160'} className="w-12 h-12 rounded-lg object-contain bg-white border border-luxe-border"/><div><p><b>№ ${i.item_number}</b> · ${i.model_name || '—'}</p><p className="text-luxe-muted">Причина: ${i.reason_label || i.reason_code || '—'}</p></div></div></button></li>`)}</ul></section>`}
+      ${!loading && page === 'repair' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><div className="flex items-center justify-between"><h2 className="font-semibold">Ремонт</h2><button className="tap-btn rounded-lg border border-luxe-border px-3 py-1" onClick=${addMaster}>Добавить мастера</button></div><ul className="mt-2 text-sm space-y-1">${(repairData.masters || []).map((m) => html`<li className="flex justify-between border-b border-luxe-border/60 pb-1"><span>${m.name} ${m.city ? `(${m.city})` : ''}</span><button className="text-rose-700" onClick=${() => deleteMaster(m.id)}>Удалить</button></li>`)}</ul></div><div className="space-y-2">${(repairData.items || []).map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex gap-3"><img src=${i.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=160'} className="w-16 h-16 rounded-lg object-contain bg-white border border-luxe-border"/><div><p className="font-semibold">№${i.item_number} · ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">Мастер: ${i.repair_master || '—'}</p><p className="text-sm text-luxe-muted">Отправлено: ${formatDate(i.repair_sent_date)}</p><p className=${`text-sm ${i.repair_days > 14 ? 'text-rose-700' : 'text-luxe-muted'}`}>В ремонте: ${i.repair_days || 0} дн.</p></div></div><div className="flex gap-2 mt-2"><button className="tap-btn rounded-lg border border-luxe-border px-3 py-1 text-sm" onClick=${() => setSelected(i)}>Открыть</button><button className="tap-btn rounded-lg bg-emerald-700 text-white px-3 py-1 text-sm" onClick=${() => completeRepair(i.item_number)}>Ремонт выполнен</button></div></article>`)}</div></section>`}
       ${!loading && page === 'activity' && html`<section className="premium-card rounded-2xl p-4 overflow-auto"><table className="min-w-[760px] w-full text-sm"><thead><tr className="text-xs text-luxe-muted"><th className="text-left">Время</th><th>Номер</th><th>Действие</th><th className="text-left">Описание</th></tr></thead><tbody>${activity.map((a) => html`<tr className="border-t border-luxe-border/60"><td className="py-2">${new Date(a.timestamp).toLocaleString('ru-RU')}</td><td>${a.item_number}</td><td>${a.action}</td><td>${a.description || '—'}</td></tr>`)}</tbody></table></section>`}
       ${!loading && page === 'rephoto' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Товары на перефото</h2><p className="text-sm text-luxe-muted mt-1">Всего: ${rephotoItems.length}</p></div>${rephotoItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><p className="font-semibold">№${i.item_number} · ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">${i.category || '—'}</p><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</section>`}
       ${!loading && page === 'settings' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Настройки</h2><p className="mt-2 text-sm text-luxe-muted">API подключен через Apps Script URL из <code>src/config.js</code>.</p><button className="tap-btn mt-3 rounded-lg border border-luxe-border px-3 py-2 text-sm" onClick=${loadAll}>Обновить данные</button></section>`}
@@ -359,7 +414,7 @@ function App() {
       <button className="tap-btn h-14 w-14 rounded-full bg-luxe-accent text-white text-3xl leading-none shadow-lg" onClick=${() => setShowFabMenu(!showFabMenu)}>+</button>
     </div>
 
-    ${selected && html`<${ItemModal} item=${selected} close=${() => setSelected(null)} save=${saveItem} updateStatus=${updateStatus} updateShipping=${updateShipping} openSale=${() => setShowSale(true)} cancelSale=${cancelSale} deleteItem=${deleteItem} />`}
+    ${selected && html`<${ItemModal} item=${selected} close=${() => setSelected(null)} save=${saveItem} updateStatus=${updateStatus} updateShipping=${updateShipping} openSale=${() => setShowSale(true)} cancelSale=${cancelSale} deleteItem=${deleteItem} sendToRepair=${sendToRepair} />`}
     ${showPurchase && html`<${PurchaseModal} close=${() => setShowPurchase(false)} save=${savePurchase} />`}
     ${showSale && html`<${SaleModal} close=${() => setShowSale(false)} items=${items} save=${saveSale} />`}
 
@@ -523,7 +578,7 @@ function SaleModal({ close, items, save }) {
     <button disabled=${invalid} className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-3 disabled:opacity-50">Сохранить продажу</button></form></div>`;
 }
 
-function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, cancelSale, deleteItem }) {
+function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, cancelSale, deleteItem, sendToRepair }) {
   const [f, setF] = useState(item);
   const [labelData, setLabelData] = useState('');
   const [photoPreview, setPhotoPreview] = useState('');
@@ -553,7 +608,7 @@ function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, 
   };
 
   return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-[60] overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); save(item.item_number, { ...sanitizeMediaFields(f), total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }} className="max-w-3xl mx-auto premium-card rounded-2xl p-4 space-y-3 max-h-[calc(100vh-2rem)] overflow-auto pb-24"><div className="flex justify-between"><h2 className="font-semibold text-lg">Карточка № ${item.item_number}</h2><button type="button" onClick=${close}>✕</button></div>
-  <div className="grid md:grid-cols-2 gap-3"><div><img src=${photoPreview || f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-contain bg-white"/><input type="file" accept="image/*" onChange=${onPickItemPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Сменить фото товара</p></div><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2">${!f.sale_id ? html`<button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>` : null}${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
+  <div className="grid md:grid-cols-2 gap-3"><div><img src=${photoPreview || f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-contain bg-white"/><input type="file" accept="image/*" onChange=${onPickItemPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Сменить фото товара</p></div><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className={\`text-sm ${stockAgeCls(daysOnStock(f.purchase_date, f.sale_date || ''))}\`}>Срок хранения: <b>${daysOnStock(f.purchase_date, f.sale_date || '')} дн.</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2">${!f.sale_id ? html`<button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>` : null}<button type="button" className="tap-btn rounded-xl border border-luxe-border px-4 py-2" onClick=${() => sendToRepair(item.item_number)}>Отправить в ремонт</button>${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
   <div className="grid md:grid-cols-2 gap-2">
     <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => { setF({ ...f, status: e.target.value }); updateStatus(item.item_number, e.target.value); }}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
     <label className="text-xs">Статус доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_status || 'pending'} onChange=${(e) => setF({ ...f, shipping_status: e.target.value })}>${Object.keys(SHIPPING_META).map((s) => html`<option value=${s}>${shippingLabel(s)}</option>`)}</select></label>
