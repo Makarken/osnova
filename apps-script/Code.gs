@@ -76,7 +76,7 @@ function routeAction(action, payload) {
     getDashboard: () => ({ ok: true, stats: getDashboard() }),
     getAnalytics: () => ({ ok: true, ...getAnalytics() }),
     getQC: () => ({ ok: true, attention: getQC() }),
-    getRepairs: () => ({ ok: true, ...getRepairs() }),
+    getRepairs: () => ({ ok: true, ...getRepairs(payload.month || payload.monthKey || '') }),
     getActivity: () => ({ ok: true, activity: getActivity() }),
     getSalesByMonth: () => ({ ok: true, ...getSalesByMonth(payload.month || payload.monthKey || '') }),
     getShippingOverview: () => ({ ok: true, ...getShippingOverview() }),
@@ -375,6 +375,10 @@ function normalizeItem(input, prev) {
     notes: cellText(input.notes != null ? input.notes : (p.notes || '')),
     updated_at: new Date().toISOString()
   };
+  if (item.listed_vinted === 'yes' && item.listed_vestiaire === 'yes' && item.arrived_from_japan !== 'yes') {
+    item.arrived_from_japan = 'yes';
+    item.japan_arrival_date = item.japan_arrival_date || new Date().toISOString().slice(0, 10);
+  }
   if (item.sale_date && toNum(item.sale_price) > 0) {
     item.sold_storage_days = calcStorageDays(item, item.sale_date);
   }
@@ -665,10 +669,16 @@ function completeRepair(itemNumber, repairCost) {
   return next;
 }
 
-function getRepairs() {
+function getRepairs(month) {
   const items = getInventory().filter((i) => String(i.status) === 'repair');
+  const monthKeyValue = month || monthKey(new Date().toISOString());
+  const activity = getRows(CONFIG.SHEETS.activity, CONFIG.HEADERS.activity)
+    .filter((a) => a.action === 'Ремонт выполнен' && monthKey(String(a.timestamp || '')) === monthKeyValue);
+  const spent = activity.reduce((acc, a) => acc + toNum(a.new_value), 0);
   return {
     masters: getRepairMasters(),
+    month: monthKeyValue,
+    spent_this_month: spent,
     items: items.map((i) => ({ ...i, repair_days: diffDays(i.repair_sent_date || i.updated_at, new Date().toISOString().slice(0, 10)) }))
   };
 }
@@ -777,8 +787,8 @@ function getDashboard() {
     profit_this_month: monthSales.reduce((a, s) => a + paidProfit(s), 0),
     profit_share_each: monthSales.reduce((a, s) => a + paidProfit(s), 0) / 3,
     purchase_balance: calcPurchaseBalance(purchases, sales),
-    pending_shipping: sales.filter((s) => shippingStatus(s.shipping_status) === 'pending').length,
-    in_transit: items.filter((i) => String(i.status) === 'transit').length,
+    pending_shipping: sales.filter((s) => shippingStatus(s.shipping_status) === 'pending' && boolText(s.money_received) !== 'yes').length,
+    in_transit: items.filter((i) => boolText(i.arrived_from_japan) !== 'yes' && !['sold','shipped','delivered','cancelled'].includes(String(i.status))).length,
     repair_count: items.filter((i) => String(i.status) === 'repair').length,
     attention_count: attention.length,
     avg_sale_days: soldWithDays.length ? soldWithDays.reduce((a, s) => a + toNum(s.sold_storage_days), 0) / soldWithDays.length : 0,
@@ -797,10 +807,11 @@ function getAnalytics() {
   sales.forEach((s) => {
     const m = monthKey(saleDateValue(s));
     if (!m) return;
-    if (!monthly[m]) monthly[m] = { sold_count: 0, revenue: 0, profit: 0, items: [] };
+    if (!monthly[m]) monthly[m] = { sold_count: 0, revenue: 0, profit: 0, potential_profit: 0, items: [] };
     monthly[m].sold_count += 1;
     monthly[m].revenue += toNum(s.sale_price);
     monthly[m].profit += paidProfit(s);
+    monthly[m].potential_profit += toNum(s.profit);
     monthly[m].items.push({
       sale_id: s.sale_id,
       item_number: s.item_number,
@@ -808,7 +819,8 @@ function getAnalytics() {
       total_cost: toNum(s.total_cost),
       sale_price: toNum(s.sale_price),
       profit: paidProfit(s),
-      profit_percent: toNum(s.total_cost) ? ((toNum(s.profit) / toNum(s.total_cost)) * 100) : 0,
+      potential_profit: toNum(s.profit),
+      profit_percent: toNum(s.total_cost) ? ((paidProfit(s) / toNum(s.total_cost)) * 100) : 0,
       sale_date: s.sale_date,
       platform: s.platform,
       money_received: s.money_received,
@@ -829,18 +841,19 @@ function getSalesByMonth(month) {
 
   return {
     month: monthKeyValue,
-    items: sales.map((s) => ({ ...s, profit: paidProfit(s), profit_percent: toNum(s.total_cost) ? ((paidProfit(s) / toNum(s.total_cost)) * 100) : 0 })),
+    items: sales.map((s) => ({ ...s, profit: paidProfit(s), potential_profit: toNum(s.profit), profit_percent: toNum(s.total_cost) ? ((paidProfit(s) / toNum(s.total_cost)) * 100) : 0 })),
     summary: {
       sold_count: sales.length,
       revenue: sales.reduce((a, x) => a + toNum(x.sale_price), 0),
-      profit: sales.reduce((a, x) => a + paidProfit(x), 0)
+      profit: sales.reduce((a, x) => a + paidProfit(x), 0),
+      potential_profit: sales.reduce((a, x) => a + toNum(x.profit), 0)
     }
   };
 }
 
 function getShippingOverview() {
   const sales = getValidSales();
-  const waiting = sales.filter((s) => shippingStatus(s.shipping_status) === 'pending');
+  const waiting = sales.filter((s) => shippingStatus(s.shipping_status) === 'pending' && boolText(s.money_received) !== 'yes');
   const shipped = sales.filter((s) => shippingStatus(s.shipping_status) === 'shipped');
   const delivered = sales.filter((s) => shippingStatus(s.shipping_status) === 'delivered');
   return {
@@ -850,7 +863,7 @@ function getShippingOverview() {
       delivered: delivered.length
     },
     items: sales
-      .filter((s) => shippingStatus(s.shipping_status) === 'pending')
+      .filter((s) => shippingStatus(s.shipping_status) === 'pending' && boolText(s.money_received) !== 'yes')
       .sort((a, b) => String(b.sale_date || b.timestamp).localeCompare(String(a.sale_date || a.timestamp)))
       .slice(0, 20)
   };
@@ -884,8 +897,8 @@ function getQC() {
       (String(item.status) === 'repair' && diffDays(item.repair_sent_date || item.updated_at, new Date().toISOString().slice(0, 10)) > 14) ? 'repair_too_long' : '',
       (!sold && calcStorageDays(item) > 90) ? 'stale_stock' : '',
       (sold && boolText(item.money_received) === 'no') ? 'sold_no_money' : '',
-      (sold && sh === 'pending') ? 'sold_not_shipped' : '',
-      (sold && sh === 'shipped') ? 'shipped_not_delivered' : ''
+      (sold && boolText(item.money_received) !== 'yes' && sh === 'pending') ? 'sold_not_shipped' : '',
+      (sold && boolText(item.money_received) !== 'yes' && sh === 'shipped') ? 'shipped_not_delivered' : ''
     ].filter(Boolean);
 
     if (!checks.length) return acc;
