@@ -11,7 +11,7 @@ const SHIPPING_STATUS = {
 };
 
 const CONFIG = {
-  SPREADSHEET_ID: '1_Se3EckR9GyiF1Qk95Dp7VXwzV1AVfQLZLGAbpw5M4M',
+  SPREADSHEET_ID: '18iiIdp8kKYGd8SV-uWFqdQfvW0EkUtg9-s6tV9mU0Eg',
   SHEETS: {
     inventory: 'Inventory',
     purchases: 'Purchases',
