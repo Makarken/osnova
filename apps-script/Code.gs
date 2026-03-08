@@ -85,6 +85,7 @@ function routeAction(action, payload) {
     updateShipping: () => ({ ok: true, item: updateShipping(payload.item_number, payload.shipping || {}) }),
     updateMoneyReceived: () => ({ ok: true, item: updateMoneyReceived(payload.item_number, payload.money_received) }),
     updatePurchaseBalance: () => ({ ok: true, value: updatePurchaseBalanceManual(payload.value) }),
+    deleteItem: () => ({ ok: true, deleted: deleteItem(payload.item_number) }),
     cancelSale: () => ({ ok: true, item: cancelSale(payload.item_number, payload.sale_id) }),
     updateStatus: () => ({ ok: true, item: updateStatus(payload.item_number, payload.status) }),
     editItem: () => ({ ok: true, item: editItem(payload.item_number, payload.updates || {}) })
@@ -191,6 +192,15 @@ function updateSalesRow(saleId, updater) {
   sh.getRange(idx + 2, 1, 1, CONFIG.HEADERS.sales.length)
     .setValues([CONFIG.HEADERS.sales.map((h) => next[h] == null ? '' : next[h])]);
   return next;
+}
+
+function deleteRowsByItemNumber(sheetName, headers, itemNumber) {
+  const sh = getSheet(sheetName, headers);
+  const rows = getRows(sheetName, headers);
+  const target = String(itemNumber);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (String(rows[i].item_number) === target) sh.deleteRow(i + 2);
+  }
 }
 
 function getSettingValue(key, fallback) {
@@ -510,6 +520,16 @@ function updateMoneyReceived(itemNumber, value) {
 
 function updatePurchaseBalanceManual(value) {
   return setSettingValue('purchase_balance_manual', toNum(value));
+}
+
+function deleteItem(itemNumber) {
+  const current = getItemByNumber(itemNumber);
+  if (!current) throw new Error('Товар не найден');
+  deleteRowsByItemNumber(CONFIG.SHEETS.inventory, CONFIG.HEADERS.inventory, itemNumber);
+  deleteRowsByItemNumber(CONFIG.SHEETS.purchases, CONFIG.HEADERS.purchases, itemNumber);
+  deleteRowsByItemNumber(CONFIG.SHEETS.sales, CONFIG.HEADERS.sales, itemNumber);
+  addActivity({ item_number: itemNumber, action: 'Удаление карточки', field: 'card', old_value: 'exists', new_value: 'deleted' });
+  return true;
 }
 
 function cancelSale(itemNumber, saleId) {

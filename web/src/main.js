@@ -287,6 +287,14 @@ function App() {
     loadAll();
   };
 
+  const deleteItem = async (itemNumber) => {
+    if (!window.confirm(`Удалить карточку товара №${itemNumber} полностью?`)) return;
+    await api('deleteItem', { item_number: itemNumber });
+    setSelected(null);
+    setToast('Карточка удалена');
+    loadAll();
+  };
+
   const toggleMoneyReceived = async (itemNumber, checked) => {
     await api('updateMoneyReceived', { item_number: itemNumber, money_received: checked ? 'yes' : 'no' });
     setToast('Оплата обновлена');
@@ -351,7 +359,7 @@ function App() {
       <button className="tap-btn h-14 w-14 rounded-full bg-luxe-accent text-white text-3xl leading-none shadow-lg" onClick=${() => setShowFabMenu(!showFabMenu)}>+</button>
     </div>
 
-    ${selected && html`<${ItemModal} item=${selected} close=${() => setSelected(null)} save=${saveItem} updateStatus=${updateStatus} updateShipping=${updateShipping} openSale=${() => setShowSale(true)} cancelSale=${cancelSale} />`}
+    ${selected && html`<${ItemModal} item=${selected} close=${() => setSelected(null)} save=${saveItem} updateStatus=${updateStatus} updateShipping=${updateShipping} openSale=${() => setShowSale(true)} cancelSale=${cancelSale} deleteItem=${deleteItem} />`}
     ${showPurchase && html`<${PurchaseModal} close=${() => setShowPurchase(false)} save=${savePurchase} />`}
     ${showSale && html`<${SaleModal} close=${() => setShowSale(false)} items=${items} save=${saveSale} />`}
 
@@ -515,7 +523,7 @@ function SaleModal({ close, items, save }) {
     <button disabled=${invalid} className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-3 disabled:opacity-50">Сохранить продажу</button></form></div>`;
 }
 
-function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, cancelSale }) {
+function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, cancelSale, deleteItem }) {
   const [f, setF] = useState(item);
   const [labelData, setLabelData] = useState('');
   const [photoPreview, setPhotoPreview] = useState('');
@@ -545,7 +553,7 @@ function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, 
   };
 
   return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-[60] overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); save(item.item_number, { ...sanitizeMediaFields(f), total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }} className="max-w-3xl mx-auto premium-card rounded-2xl p-4 space-y-3 max-h-[calc(100vh-2rem)] overflow-auto pb-24"><div className="flex justify-between"><h2 className="font-semibold text-lg">Карточка № ${item.item_number}</h2><button type="button" onClick=${close}>✕</button></div>
-  <div className="grid md:grid-cols-2 gap-3"><div><img src=${photoPreview || f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-contain bg-white"/><input type="file" accept="image/*" onChange=${onPickItemPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Сменить фото товара</p></div><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2"><button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
+  <div className="grid md:grid-cols-2 gap-3"><div><img src=${photoPreview || f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-contain bg-white"/><input type="file" accept="image/*" onChange=${onPickItemPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Сменить фото товара</p></div><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2">${!f.sale_id ? html`<button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>` : null}${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
   <div className="grid md:grid-cols-2 gap-2">
     <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => { setF({ ...f, status: e.target.value }); updateStatus(item.item_number, e.target.value); }}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
     <label className="text-xs">Статус доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_status || 'pending'} onChange=${(e) => setF({ ...f, shipping_status: e.target.value })}>${Object.keys(SHIPPING_META).map((s) => html`<option value=${s}>${shippingLabel(s)}</option>`)}</select></label>
@@ -560,9 +568,9 @@ function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, 
     <label className="text-xs">Дата отправки<input type="date" className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_date || ''} onInput=${(e) => setF({ ...f, shipping_date: e.target.value })}/></label>
     <label className="text-xs">Трек-номер<input className="w-full mt-1 rounded-xl border p-2" value=${f.tracking_number || ''} onInput=${(e) => setF({ ...f, tracking_number: e.target.value })}/></label>
     <label className="text-xs md:col-span-2">Лейбл доставки<input className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_label_url || ''} onInput=${(e) => setF({ ...f, shipping_label_url: e.target.value })}/></label>
-    <div className="md:col-span-2"><button type="button" className="tap-btn rounded-xl border border-luxe-border px-4 py-2" onClick=${onPickShippingLabel}>Загрузить лейбл</button><input type="file" accept="application/pdf,image/*" onChange=${onPickShippingLabel} className="mt-2 text-sm"/></div>
+    <div className="md:col-span-2"><p className="text-sm text-luxe-muted">Загрузить этикетку для отправки</p><input type="file" accept="application/pdf,image/*" onChange=${onPickShippingLabel} className="mt-2 text-sm"/></div>
   </div>
-  <div className="flex gap-2"><button type="button" className="tap-btn rounded-xl border border-luxe-border px-4 py-2" onClick=${() => { if (f.sale_id) { updateShipping(item.item_number, { tracking_number: f.tracking_number, shipping_label_url: f.shipping_label_url, shipping_date: f.shipping_date, shipping_status: f.shipping_status }); } save(item.item_number, { ...sanitizeMediaFields(f), total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }}>Сохранить карточку</button></div>
+  <div className="flex gap-2"><button type="button" className="tap-btn rounded-xl border border-luxe-border px-4 py-2" onClick=${() => { if (f.sale_id) { updateShipping(item.item_number, { tracking_number: f.tracking_number, shipping_label_url: f.shipping_label_url, shipping_date: f.shipping_date, shipping_status: f.shipping_status }); } save(item.item_number, { ...sanitizeMediaFields(f), total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }}>Сохранить карточку</button><button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => deleteItem(item.item_number)}>Удалить карточку</button></div>
   </form></div>`;
 }
 
