@@ -175,15 +175,48 @@ function App() {
 
   const rephotoItems = useMemo(() => items.filter((i) => boolText(i.need_rephoto) === 'yes'), [items]);
 
-  const savePurchase = async (payload) => {
-    const r = await api('createPurchase', payload);
-    if (!r?.item?.item_number) throw new Error('Покупка не сохранилась');
-    setShowPurchase(false);
-    setShowFabMenu(false);
-    setToast('Покупка сохранена');
-    loadAll();
+  const humanError = (err, fallback) => {
+    const msg = String(err?.message || '').trim();
+    if (!msg) return fallback;
+    if (msg.includes('Unknown action')) return 'Бэкенд Apps Script не обновлён. Опубликуйте новую версию Web App.';
+    if (msg.includes('Failed to fetch')) return 'Нет связи с Apps Script. Проверьте URL и доступ к интернету.';
+    return msg;
   };
-  const saveSale = async (payload) => { await api('recordSale', payload); setShowSale(false); setShowFabMenu(false); setToast('Продажа сохранена'); loadAll(); };
+
+  const savePurchase = async (payload) => {
+    try {
+      setError('');
+      const r = await api('createPurchase', payload);
+      if (!r?.item?.item_number) throw new Error('Покупка не сохранилась в ответе API');
+      const inv = await api('getInventory');
+      const persisted = (inv.items || []).some((x) => String(x.item_number) === String(r.item.item_number));
+      if (!persisted) throw new Error('Покупка не найдена в таблице после сохранения');
+      setShowPurchase(false);
+      setShowFabMenu(false);
+      setToast('Покупка сохранена');
+      loadAll();
+    } catch (e) {
+      setError('Ошибка сохранения покупки: ' + humanError(e, 'Не удалось сохранить покупку'));
+    }
+  };
+
+  const saveSale = async (payload) => {
+    try {
+      setError('');
+      const r = await api('recordSale', payload);
+      if (!r?.item?.item_number) throw new Error('Продажа не сохранилась в ответе API');
+      const sm = await api('getSalesByMonth', { month: (payload.sale_date || new Date().toISOString().slice(0, 10)).slice(0, 7) });
+      const persisted = (sm.items || []).some((x) => String(x.item_number) === String(payload.item_number) && Number(x.sale_price || 0) === Number(payload.sale_price || 0));
+      if (!persisted) throw new Error('Продажа не найдена в таблице после сохранения');
+      setShowSale(false);
+      setShowFabMenu(false);
+      setToast('Продажа сохранена');
+      loadAll();
+    } catch (e) {
+      setError('Ошибка сохранения продажи: ' + humanError(e, 'Не удалось сохранить продажу'));
+    }
+  };
+
   const saveItem = async (itemNumber, updates) => { await api('editItem', { item_number: itemNumber, updates }); setSelected(null); setToast('Карточка обновлена'); loadAll(); };
   const updateStatus = async (itemNumber, status) => { await api('updateStatus', { item_number: itemNumber, status }); setToast('Статус обновлён'); loadAll(); };
   const updateShipping = async (itemNumber, shipping) => { await api('updateShipping', { item_number: itemNumber, shipping }); setToast('Доставка обновлена'); loadAll(); };
@@ -222,11 +255,11 @@ function App() {
       <div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Ожидают отправки / доставки</h2><ul className="mt-2 text-sm space-y-2">${(shippingOverview.items || []).slice(0, 7).map((s) => html`<li className="border-b border-luxe-border/60 pb-2">№${s.item_number} · ${s.platform || '—'} · ${s.sale_date || '—'} · <${ShippingBadge} status=${s.shipping_status}/></li>`)}</ul></div></section>`}
 
       ${!loading && page === 'inventory' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-3 grid grid-cols-1 gap-2 items-end"><div><label className="text-xs text-luxe-muted">Поиск</label><input className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="Номер или модель"/></div><div><label className="text-xs text-luxe-muted">Статус</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${statusFilter} onChange=${(e) => setStatusFilter(e.target.value)}><option value="all">Все</option>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></div></div>
-      <div className="space-y-2">${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between items-start gap-2"><div><p className="font-semibold">№${i.item_number} · ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">${i.platform || '—'} · ${i.sale_date || '—'}</p><p className="text-sm">Категория: ${i.category || '—'}</p></div><div className="flex flex-col gap-1 items-end"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
+      ${!filteredItems.length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">Нет товаров. Добавьте покупку через +</div>` : null}<div className="space-y-2">${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between items-start gap-2"><div><p className="font-semibold">№${i.item_number} · ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">${i.platform || '—'} · ${i.sale_date || '—'}</p><p className="text-sm">Категория: ${i.category || '—'}</p></div><div className="flex flex-col gap-1 items-end"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
 
       ${!loading && page === 'sales' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4 flex flex-wrap items-end gap-3"><div><label className="text-xs text-luxe-muted">Месяц</label><input type="month" className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></div></div>
       <div className="grid grid-cols-3 gap-3">${[['Продано', monthSales.summary?.sold_count || 0], ['Выручка', money(monthSales.summary?.revenue)], ['Прибыль', money(monthSales.summary?.profit)]].map(([t, v]) => html`<div className="premium-card rounded-2xl p-3"><p className="text-xs text-luxe-muted">${t}</p><p className="text-lg font-semibold">${v}</p></div>`)}</div>
-      <div className="space-y-2">${(monthSales.items || []).map((s) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${s.sale_date || '—'} · ${money(s.sale_price)}</p></div><div className="flex flex-col gap-1 items-end"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}</div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`)}</div></section>`}
+      ${!(monthSales.items || []).length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">За выбранный месяц продаж нет.</div>` : null}<div className="space-y-2">${(monthSales.items || []).map((s) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold">№${s.item_number} · ${s.platform || '—'}</p><p className="text-sm text-luxe-muted">${s.sale_date || '—'} · ${money(s.sale_price)}</p></div><div className="flex flex-col gap-1 items-end"><${ShippingBadge} status=${s.shipping_status}/>${s.shipping_label_url ? html`<a className="text-blue-700 underline text-xs" href=${s.shipping_label_url} target="_blank">Лейбл</a>` : null}</div></div><button className="tap-btn mt-2 rounded-lg border border-rose-300 text-rose-700 px-2 py-1 text-xs" onClick=${() => cancelSale(s.item_number, s.sale_id)}>Отменить продажу</button></article>`)}</div></section>`}
 
       ${!loading && page === 'analytics' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Продажи по месяцам</h2><ul className="mt-2 text-sm space-y-2">${Object.entries(analytics.monthly || {}).sort(([a], [b]) => a.localeCompare(b)).map(([m, v]) => html`<li className="border-b border-luxe-border/60 pb-2"><div className="flex justify-between"><b>${m}</b><span>${v.sold_count} шт.</span></div><div className="text-luxe-muted">Выручка: ${money(v.revenue)} · Прибыль: ${money(v.profit)}</div></li>`)}</ul></div></section>`}
       ${!loading && page === 'qc' && html`<section className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Контроль</h2><ul className="mt-2 text-sm list-disc list-inside">${attention.map((i) => html`<li>№ ${i.item_number} · ${i.model_name || '—'}</li>`)}</ul></section>`}

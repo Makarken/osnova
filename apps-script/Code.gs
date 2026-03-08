@@ -154,6 +154,22 @@ function isCancelledSale(s) {
 function activeSalesOnly(sales) {
   return sales.filter((s) => !isCancelledSale(s));
 }
+
+
+function validSaleRow(sale, itemsByNumber) {
+  if (isCancelledSale(sale)) return false;
+  if (!String(sale.item_number || '').trim()) return false;
+  if (toNum(sale.sale_price) <= 0) return false;
+  if (itemsByNumber && !itemsByNumber[String(sale.item_number)]) return false;
+  return true;
+}
+
+function getValidSales() {
+  const items = getInventory();
+  const byNumber = {};
+  items.forEach((i) => { byNumber[String(i.item_number)] = true; });
+  return getRows(CONFIG.SHEETS.sales, CONFIG.HEADERS.sales).filter((s) => validSaleRow(s, byNumber));
+}
 function createSaleId(itemNumber) {
   return String(itemNumber) + '-' + new Date().getTime();
 }
@@ -385,7 +401,7 @@ function calcPurchaseBalance(items) {
 
 function getDashboard() {
   const items = getInventory();
-  const sales = activeSalesOnly(getRows(CONFIG.SHEETS.sales, CONFIG.HEADERS.sales));
+  const sales = getValidSales();
   const currentMonth = monthKey(new Date().toISOString());
   const monthSales = sales.filter((s) => monthKey(s.sale_date || s.timestamp) === currentMonth);
 
@@ -404,7 +420,7 @@ function getDashboard() {
 }
 
 function getAnalytics() {
-  const sales = activeSalesOnly(getRows(CONFIG.SHEETS.sales, CONFIG.HEADERS.sales));
+  const sales = getValidSales();
   const monthly = {};
   sales.forEach((s) => {
     const m = monthKey(s.sale_date || s.timestamp);
@@ -432,7 +448,7 @@ function getAnalytics() {
 
 function getSalesByMonth(month) {
   const monthKeyValue = month || monthKey(new Date().toISOString());
-  const sales = activeSalesOnly(getRows(CONFIG.SHEETS.sales, CONFIG.HEADERS.sales))
+  const sales = getValidSales()
     .filter((s) => monthKey(s.sale_date || s.timestamp) === monthKeyValue)
     .sort((a, b) => String(a.sale_date).localeCompare(String(b.sale_date)));
 
@@ -448,7 +464,7 @@ function getSalesByMonth(month) {
 }
 
 function getShippingOverview() {
-  const sales = activeSalesOnly(getRows(CONFIG.SHEETS.sales, CONFIG.HEADERS.sales));
+  const sales = getValidSales();
   const waiting = sales.filter((s) => shippingStatus(s.shipping_status) === 'pending');
   const shipped = sales.filter((s) => shippingStatus(s.shipping_status) === 'shipped');
   const delivered = sales.filter((s) => shippingStatus(s.shipping_status) === 'delivered');
