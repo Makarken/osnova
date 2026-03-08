@@ -46,6 +46,20 @@ const n = (v) => Number(v || 0);
 const boolText = (v) => ['true', '1', 'yes', 'да', 'y'].includes(String(v || '').toLowerCase()) ? 'yes' : 'no';
 const shippingLabel = (status) => (SHIPPING_META[status] || SHIPPING_META.pending).label;
 
+
+const normalizePurchasePayload = (payload) => ({
+  ...payload,
+  item_id: String(payload.item_number || '').trim(),
+  model: payload.model_name || '',
+  brand: payload.brand || '—',
+  purchase_price: Number(payload.total_cost || 0)
+});
+
+const normalizeSalePayload = (payload) => ({
+  ...payload,
+  item_id: String(payload.item_number || '').trim()
+});
+
 const api = async (action, payload = null) => {
   if (!APPS_SCRIPT_URL) throw new Error('Вставьте URL Apps Script в src/config.js');
   if (!payload) {
@@ -186,7 +200,7 @@ function App() {
   const savePurchase = async (payload) => {
     try {
       setError('');
-      const r = await api('createPurchase', payload);
+      const r = await api('createPurchase', normalizePurchasePayload(payload));
       if (!r?.item?.item_number) throw new Error('Покупка не сохранилась в ответе API');
       const inv = await api('getInventory');
       const persisted = (inv.items || []).some((x) => String(x.item_number) === String(r.item.item_number));
@@ -203,7 +217,7 @@ function App() {
   const saveSale = async (payload) => {
     try {
       setError('');
-      const r = await api('recordSale', payload);
+      const r = await api('recordSale', normalizeSalePayload(payload));
       if (!r?.item?.item_number) throw new Error('Продажа не сохранилась в ответе API');
       const sm = await api('getSalesByMonth', { month: (payload.sale_date || new Date().toISOString().slice(0, 10)).slice(0, 7) });
       const persisted = (sm.items || []).some((x) => String(x.item_number) === String(payload.item_number) && Number(x.sale_price || 0) === Number(payload.sale_price || 0));
