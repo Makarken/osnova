@@ -21,11 +21,11 @@ const CONFIG = {
   },
   HEADERS: {
     inventory: [
-      'item_id', 'item_number', 'model', 'category', 'purchase_price', 'purchase_date',
-      'sale_price', 'sale_date', 'platform', 'status', 'shipping_status', 'tracking_number',
-      'shipping_label_url', 'notes', 'photo_url', 'model_name', 'total_cost', 'sale_id',
-      'buyer', 'platform_fee', 'profit', 'money_received', 'listed_vinted', 'listed_vestiaire',
-      'need_rephoto', 'shipping_date', 'updated_at'
+      'item_number', 'photo_url', 'model_name', 'category', 'purchase_date', 'total_cost',
+      'status', 'listed_vinted', 'listed_vestiaire', 'need_rephoto', 'money_received',
+      'sale_id', 'sale_price', 'sale_date', 'platform', 'buyer', 'platform_fee', 'profit',
+      'tracking_number', 'shipping_label_url', 'shipping_date', 'shipping_status',
+      'notes', 'updated_at'
     ],
     purchases: ['timestamp', 'item_number', 'model_name', 'purchase_date', 'total_cost', 'notes'],
     sales: [
@@ -34,7 +34,7 @@ const CONFIG = {
       'tracking_number', 'shipping_label_url', 'shipping_date', 'pre_sale_status',
       'is_cancelled', 'cancelled_at', 'notes'
     ],
-    statistics: ['timestamp', 'active_stock', 'listed_vinted', 'listed_vestiaire', 'need_rephoto', 'sold_this_month', 'profit_this_month', 'purchase_balance', 'stock_value'],
+    statistics: ['timestamp', 'active_stock', 'stock_value', 'sold_this_month', 'profit_this_month', 'purchase_balance', 'pending_shipping', 'in_transit'],
     activity: ['timestamp', 'item_number', 'action', 'field', 'old_value', 'new_value', 'actor']
   },
   STATUS_LABELS: {
@@ -99,7 +99,50 @@ function getSheet(name, headers) {
   const sheet = ss().getSheetByName(name) || ss().insertSheet(name);
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    return sheet;
   }
+
+  const width = Math.max(sheet.getLastColumn(), headers.length);
+  const currentHeaders = sheet.getRange(1, 1, 1, width).getValues()[0].slice(0, headers.length).map((x) => String(x || '').trim());
+  const needMigrate = currentHeaders.length !== headers.length || headers.some((h, i) => currentHeaders[i] !== h);
+  if (!needMigrate) return sheet;
+
+  const lastRow = sheet.getLastRow();
+  const oldHeaders = sheet.getRange(1, 1, 1, width).getValues()[0].map((x) => String(x || '').trim());
+  const rows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, width).getValues() : [];
+
+  const aliases = {
+    item_number: ['item_number', 'item_id'],
+    model_name: ['model_name', 'model'],
+    total_cost: ['total_cost', 'purchase_price'],
+    purchase_date: ['purchase_date'],
+    status: ['status'],
+    sale_price: ['sale_price'],
+    sale_date: ['sale_date'],
+    platform: ['platform'],
+    shipping_status: ['shipping_status'],
+    tracking_number: ['tracking_number'],
+    shipping_label_url: ['shipping_label_url'],
+    notes: ['notes'],
+    photo_url: ['photo_url']
+  };
+
+  const mappedRows = rows.map((row) => {
+    const obj = {};
+    oldHeaders.forEach((h, i) => { if (h) obj[h] = row[i]; });
+    return headers.map((h) => {
+      if (obj[h] != null && obj[h] !== '') return obj[h];
+      const alt = aliases[h] || [];
+      for (let i = 0; i < alt.length; i += 1) {
+        if (obj[alt[i]] != null && obj[alt[i]] !== '') return obj[alt[i]];
+      }
+      return '';
+    });
+  });
+
+  sheet.clear();
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  if (mappedRows.length) sheet.getRange(2, 1, mappedRows.length, headers.length).setValues(mappedRows);
   return sheet;
 }
 
@@ -176,39 +219,33 @@ function createSaleId(itemNumber) {
 
 function normalizeItem(input, prev) {
   const p = prev || {};
-  const itemNumber = String(input.item_number != null ? input.item_number : p.item_number || '').trim();
-  const purchasePrice = toNum(input.purchase_price != null ? input.purchase_price : (input.total_cost != null ? input.total_cost : (p.purchase_price != null ? p.purchase_price : p.total_cost)));
-  const modelValue = input.model != null ? input.model : (input.model_name != null ? input.model_name : (p.model != null ? p.model : p.model_name));
   const item = {
-    item_id: String(input.item_id != null ? input.item_id : (p.item_id || ('ITM-' + itemNumber))).trim(),
-    item_number: itemNumber,
-    model: modelValue || '',
-    model_name: modelValue || '',
-    category: input.category != null ? input.category : (p.category || ''),
-    purchase_price: purchasePrice,
-    total_cost: purchasePrice,
-    purchase_date: input.purchase_date != null ? input.purchase_date : (p.purchase_date || ''),
-    sale_price: toNum(input.sale_price != null ? input.sale_price : p.sale_price),
-    sale_date: input.sale_date != null ? input.sale_date : (p.sale_date || ''),
-    platform: input.platform != null ? input.platform : (p.platform || ''),
-    status: input.status != null ? input.status : (p.status || 'purchased'),
-    shipping_status: shippingStatus(input.shipping_status != null ? input.shipping_status : p.shipping_status),
-    tracking_number: input.tracking_number != null ? input.tracking_number : (p.tracking_number || ''),
-    shipping_label_url: input.shipping_label_url != null ? input.shipping_label_url : (p.shipping_label_url || ''),
-    notes: input.notes != null ? input.notes : (p.notes || ''),
+    item_number: String(input.item_number != null ? input.item_number : p.item_number || '').trim(),
     photo_url: input.photo_url != null ? input.photo_url : (p.photo_url || ''),
-    sale_id: input.sale_id != null ? input.sale_id : (p.sale_id || ''),
-    buyer: input.buyer != null ? input.buyer : (p.buyer || ''),
-    platform_fee: toNum(input.platform_fee != null ? input.platform_fee : p.platform_fee),
-    profit: 0,
-    money_received: boolText(input.money_received != null ? input.money_received : p.money_received),
+    model_name: input.model_name != null ? input.model_name : (p.model_name || ''),
+    category: input.category != null ? input.category : (p.category || ''),
+    purchase_date: input.purchase_date != null ? input.purchase_date : (p.purchase_date || ''),
+    total_cost: toNum(input.total_cost != null ? input.total_cost : p.total_cost),
+    status: input.status != null ? input.status : (p.status || 'purchased'),
     listed_vinted: boolText(input.listed_vinted != null ? input.listed_vinted : p.listed_vinted),
     listed_vestiaire: boolText(input.listed_vestiaire != null ? input.listed_vestiaire : p.listed_vestiaire),
     need_rephoto: boolText(input.need_rephoto != null ? input.need_rephoto : p.need_rephoto),
+    money_received: boolText(input.money_received != null ? input.money_received : p.money_received),
+    sale_id: input.sale_id != null ? input.sale_id : (p.sale_id || ''),
+    sale_price: toNum(input.sale_price != null ? input.sale_price : p.sale_price),
+    sale_date: input.sale_date != null ? input.sale_date : (p.sale_date || ''),
+    platform: input.platform != null ? input.platform : (p.platform || ''),
+    buyer: input.buyer != null ? input.buyer : (p.buyer || ''),
+    platform_fee: toNum(input.platform_fee != null ? input.platform_fee : p.platform_fee),
+    profit: 0,
+    tracking_number: input.tracking_number != null ? input.tracking_number : (p.tracking_number || ''),
+    shipping_label_url: input.shipping_label_url != null ? input.shipping_label_url : (p.shipping_label_url || ''),
     shipping_date: input.shipping_date != null ? input.shipping_date : (p.shipping_date || ''),
+    shipping_status: shippingStatus(input.shipping_status != null ? input.shipping_status : p.shipping_status),
+    notes: input.notes != null ? input.notes : (p.notes || ''),
     updated_at: new Date().toISOString()
   };
-  item.profit = item.sale_price ? (item.sale_price - item.purchase_price - item.platform_fee) : 0;
+  item.profit = item.sale_price ? (item.sale_price - item.total_cost - item.platform_fee) : 0;
   return item;
 }
 
@@ -243,21 +280,18 @@ function getItemByNumber(itemNumber) {
 }
 
 function createPurchase(payload) {
-  const itemNumber = String(payload.item_number || payload.item_id || '').trim();
+  const itemNumber = String(payload.item_number || '').trim();
   if (!itemNumber) throw new Error('Нужен короткий номер товара');
-  const modelName = String(payload.model_name || payload.model || '').trim();
+  const modelName = String(payload.model_name || '').trim();
   if (!modelName) throw new Error('Нужна модель');
   const items = getInventory();
   if (items.some((i) => String(i.item_number) === itemNumber)) throw new Error('Такой номер уже существует');
 
   const item = normalizeItem({
     ...payload,
-    item_id: payload.item_id || ('ITM-' + itemNumber + '-' + new Date().getTime()),
     item_number: itemNumber,
     model_name: modelName,
-    model: modelName,
-    purchase_price: payload.purchase_price != null ? payload.purchase_price : payload.total_cost,
-    total_cost: payload.total_cost != null ? payload.total_cost : payload.purchase_price,
+    total_cost: payload.total_cost,
     status: payload.status || 'purchased'
   }, {});
   appendRow(CONFIG.SHEETS.inventory, CONFIG.HEADERS.inventory, item);
@@ -432,14 +466,13 @@ function getDashboard() {
   const monthSales = sales.filter((s) => monthKey(s.sale_date || s.timestamp) === currentMonth);
 
   const stats = {
-    active_stock: items.filter((i) => !['sold', 'shipped', 'delivered'].includes(String(i.status))).length,
-    listed_vinted: items.filter((i) => boolText(i.listed_vinted) === 'yes').length,
-    listed_vestiaire: items.filter((i) => boolText(i.listed_vestiaire) === 'yes').length,
-    need_rephoto: items.filter((i) => boolText(i.need_rephoto) === 'yes').length,
+    active_stock: items.filter((i) => !['sold', 'shipped', 'delivered', 'cancelled'].includes(String(i.status))).length,
+    stock_value: items.filter((i) => !['sold', 'shipped', 'delivered', 'cancelled'].includes(String(i.status))).reduce((acc, i) => acc + toNum(i.total_cost), 0),
     sold_this_month: monthSales.length,
     profit_this_month: monthSales.reduce((a, s) => a + toNum(s.profit), 0),
     purchase_balance: calcPurchaseBalance(items),
-    stock_value: items.filter((i) => String(i.status) !== 'sold').reduce((acc, i) => acc + toNum(i.purchase_price || i.total_cost), 0)
+    pending_shipping: sales.filter((s) => shippingStatus(s.shipping_status) === 'pending').length,
+    in_transit: sales.filter((s) => shippingStatus(s.shipping_status) === 'shipped').length
   };
 
   appendRow(CONFIG.SHEETS.statistics, CONFIG.HEADERS.statistics, { timestamp: new Date().toISOString(), ...stats });
