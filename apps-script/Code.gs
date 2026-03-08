@@ -887,7 +887,8 @@ function getQC() {
 
   return getInventory().reduce((acc, item) => {
     const sold = soldStatuses.includes(String(item.status));
-    if (sold && boolText(item.money_received) === 'yes') return acc;
+    const closedSale = boolText(item.money_received) === 'yes' && (sold || String(item.sale_id || '').trim());
+    if (closedSale) return acc;
     const sh = shippingStatus(item.shipping_status);
     const checks = [
       !item.photo_url ? 'no_photo' : '',
