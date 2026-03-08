@@ -375,7 +375,7 @@ function normalizeItem(input, prev) {
     notes: cellText(input.notes != null ? input.notes : (p.notes || '')),
     updated_at: new Date().toISOString()
   };
-  if (item.listed_vinted === 'yes' && item.listed_vestiaire === 'yes' && item.arrived_from_japan !== 'yes') {
+  if ((item.listed_vinted === 'yes' || item.listed_vestiaire === 'yes') && item.arrived_from_japan !== 'yes') {
     item.arrived_from_japan = 'yes';
     item.japan_arrival_date = item.japan_arrival_date || new Date().toISOString().slice(0, 10);
   }
@@ -887,6 +887,7 @@ function getQC() {
 
   return getInventory().reduce((acc, item) => {
     const sold = soldStatuses.includes(String(item.status));
+    if (sold && boolText(item.money_received) === 'yes') return acc;
     const sh = shippingStatus(item.shipping_status);
     const checks = [
       !item.photo_url ? 'no_photo' : '',
