@@ -6,6 +6,6 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "check": "node --check server/index.js && node --check web/src/main.js"
+    "check": "node --check server/index.js && node --check web/src/main.js && node --check docs/src/main.js"
   }
 }

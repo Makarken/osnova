@@ -39,7 +39,7 @@ const MENU_PAGES = [
 ];
 
 const PLATFORM_OPTIONS = ['Vinted', 'Vestiaire'];
-const CATEGORY_OPTIONS = ['Сумка', 'Часы', 'Аксессуар', 'Обувь'];
+const CATEGORY_OPTIONS = ['Сумка', 'Часы', 'Аксессуар', 'Обувь', 'Одежда'];
 
 const money = (v) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(v || 0));
 const n = (v) => Number(v || 0);
@@ -344,7 +344,7 @@ function PurchaseModal({ close, save }) {
       <label className="text-xs">Себестоимость<input type="number" className="w-full mt-1 rounded-xl border p-2" value=${f.total_cost} onInput=${(e) => setF({ ...f, total_cost: e.target.value })}/></label>
       <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => setF({ ...f, status: e.target.value })}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
     </div>
-    <div className="rounded-xl border border-luxe-border p-3 bg-white"><p className="text-sm font-medium">Фото товара</p><input type="file" accept="image/*" onChange=${onPickPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Выберите фото с телефона/компьютера. Ссылка — только как запасной вариант.</p><input className="w-full mt-2 rounded-xl border p-2 text-sm" value=${f.photo_url} onInput=${(e) => setF({ ...f, photo_url: e.target.value })} placeholder="(опционально) или вставьте ссылку"/>${(preview || f.photo_url) ? html`<img src=${preview || f.photo_url} className="mt-2 h-28 rounded-lg object-cover"/>` : null}</div>
+    <div className="rounded-xl border border-luxe-border p-3 bg-white"><p className="text-sm font-medium">Фото товара</p><input type="file" accept="image/*" onChange=${onPickPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Выберите фото с телефона/компьютера.</p><label className="text-xs text-luxe-muted mt-2 block">(опционально) Вставьте ссылку с Buyee</label><input className="w-full mt-1 rounded-xl border p-2 text-sm" value=${f.photo_url} onInput=${(e) => setF({ ...f, photo_url: e.target.value })} placeholder="Вставьте ссылку с Buyee"/>${(preview || f.photo_url) ? html`<img src=${preview || f.photo_url} className="mt-2 h-28 rounded-lg object-cover"/>` : null}</div>
     <label className="text-xs block">Заметки<textarea className="w-full mt-1 rounded-xl border p-2" rows="2" value=${f.notes} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea></label>
     <button disabled=${invalid} className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-3 disabled:opacity-50">Сохранить покупку</button></form></div>`;
 }
@@ -386,8 +386,23 @@ function SaleModal({ close, items, save }) {
       })
       .catch((e) => {
         if (cancelled) return;
-        setSelectedItem(null);
-        setLookupError(String(e.message || 'Ошибка поиска товара'));
+        const msg = String(e.message || '');
+        if (msg.includes('Unknown action: getItemByNumber')) {
+          const local = items.find((x) => String(x.item_number).trim() === num || (!Number.isNaN(Number(num)) && Number(x.item_number) === Number(num))) || null;
+          if (!local) {
+            setSelectedItem(null);
+            setLookupError('Товар с таким номером не найден');
+          } else if (local.sale_id) {
+            setSelectedItem(null);
+            setLookupError('Товар уже продан, выберите другой номер');
+          } else {
+            setSelectedItem(local);
+            setLookupError('');
+          }
+        } else {
+          setSelectedItem(null);
+          setLookupError(String(e.message || 'Ошибка поиска товара'));
+        }
       })
       .finally(() => {
         if (!cancelled) setLookupLoading(false);
