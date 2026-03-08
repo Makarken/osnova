@@ -190,6 +190,10 @@ function updateSalesRow(saleId, updater) {
 }
 
 function toNum(v) { return Number(v || 0); }
+function cellText(v) {
+  const txt = String(v == null ? '' : v);
+  return txt.length > 49000 ? '' : txt;
+}
 function monthKey(v) {
   const raw = String(v || '').trim();
   if (!raw) return '';
@@ -258,8 +262,8 @@ function normalizeItem(input, prev) {
   const costs = calcTotalCost(input, p);
   const item = {
     item_number: String(input.item_number != null ? input.item_number : p.item_number || '').trim(),
-    photo_url: input.photo_url != null ? input.photo_url : (p.photo_url || ''),
-    buyee_url: input.buyee_url != null ? input.buyee_url : (p.buyee_url || ''),
+    photo_url: cellText(input.photo_url != null ? input.photo_url : (p.photo_url || '')),
+    buyee_url: cellText(input.buyee_url != null ? input.buyee_url : (p.buyee_url || '')),
     model_name: input.model_name != null ? input.model_name : (p.model_name || ''),
     category: input.category != null ? input.category : (p.category || ''),
     purchase_date: input.purchase_date != null ? input.purchase_date : (p.purchase_date || ''),
@@ -281,11 +285,11 @@ function normalizeItem(input, prev) {
     buyer: input.buyer != null ? input.buyer : (p.buyer || ''),
     platform_fee: toNum(input.platform_fee != null ? input.platform_fee : p.platform_fee),
     profit: 0,
-    tracking_number: input.tracking_number != null ? input.tracking_number : (p.tracking_number || ''),
-    shipping_label_url: input.shipping_label_url != null ? input.shipping_label_url : (p.shipping_label_url || ''),
+    tracking_number: cellText(input.tracking_number != null ? input.tracking_number : (p.tracking_number || '')),
+    shipping_label_url: cellText(input.shipping_label_url != null ? input.shipping_label_url : (p.shipping_label_url || '')),
     shipping_date: input.shipping_date != null ? input.shipping_date : (p.shipping_date || ''),
     shipping_status: shippingStatus(input.shipping_status != null ? input.shipping_status : p.shipping_status),
-    notes: input.notes != null ? input.notes : (p.notes || ''),
+    notes: cellText(input.notes != null ? input.notes : (p.notes || '')),
     updated_at: new Date().toISOString()
   };
   item.profit = item.sale_price ? (item.sale_price - item.total_cost - item.platform_fee) : 0;

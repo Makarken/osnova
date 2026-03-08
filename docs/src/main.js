@@ -55,8 +55,20 @@ const formatMonthRu = (month) => {
 };
 
 
+const MAX_CELL_LEN = 49000;
+const clampCell = (v) => {
+  const txt = String(v || '');
+  return txt.length > MAX_CELL_LEN ? '' : txt;
+};
+const sanitizeMediaFields = (obj = {}) => ({
+  ...obj,
+  photo_url: clampCell(obj.photo_url),
+  shipping_label_url: clampCell(obj.shipping_label_url),
+  buyee_url: clampCell(obj.buyee_url)
+});
+
 const normalizePurchasePayload = (payload) => ({
-  ...payload,
+  ...sanitizeMediaFields(payload),
   item_number: String(payload.item_number || '').trim(),
   base_cost: Number(payload.base_cost || 0),
   shipping_japan: Number(payload.shipping_japan || 0),
@@ -67,7 +79,7 @@ const normalizePurchasePayload = (payload) => ({
 });
 
 const normalizeSalePayload = (payload) => ({
-  ...payload,
+  ...sanitizeMediaFields(payload),
   item_number: String(payload.item_number || '').trim()
 });
 
@@ -196,7 +208,7 @@ function App() {
   const saveSale = async (payload) => {
     try {
       setError('');
-      const requestPayload = normalizeSalePayload(payload);
+      const requestPayload = sanitizeMediaFields(normalizeSalePayload(payload));
       const r = await api('recordSale', requestPayload);
       if (!(r?.ok && r?.item)) throw new Error(r?.error || `Некорректный ответ recordSale: ${JSON.stringify(r)}`);
       setShowSale(false);
@@ -208,9 +220,9 @@ function App() {
     }
   };
 
-  const saveItem = async (itemNumber, updates) => { await api('editItem', { item_number: itemNumber, updates }); setSelected(null); setToast('Карточка обновлена'); loadAll(); };
+  const saveItem = async (itemNumber, updates) => { await api('editItem', { item_number: itemNumber, updates: sanitizeMediaFields(updates) }); setSelected(null); setToast('Карточка обновлена'); loadAll(); };
   const updateStatus = async (itemNumber, status) => { await api('updateStatus', { item_number: itemNumber, status }); setToast('Статус обновлён'); loadAll(); };
-  const updateShipping = async (itemNumber, shipping) => { await api('updateShipping', { item_number: itemNumber, shipping }); setToast('Доставка обновлена'); loadAll(); };
+  const updateShipping = async (itemNumber, shipping) => { await api('updateShipping', { item_number: itemNumber, shipping: sanitizeMediaFields(shipping) }); setToast('Доставка обновлена'); loadAll(); };
   const cancelSale = async (itemNumber, saleId) => {
     if (!window.confirm(`Отменить продажу товара №${itemNumber}?`)) return;
     await api('cancelSale', { item_number: itemNumber, sale_id: saleId });
@@ -224,11 +236,9 @@ function App() {
   };
 
   return html`<div className="min-h-screen pb-24 bg-gradient-to-br from-luxe-bg via-luxe-bg to-[#ece6db]">
-    <header className="sticky top-0 z-20 border-b border-luxe-border bg-luxe-bg/95 backdrop-blur px-4 py-3 flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        <button className="tap-btn rounded-xl border border-luxe-border bg-white px-3 py-2 text-sm" onClick=${() => setShowMenu(true)}>☰</button>
-        <h1 className="text-lg font-semibold">База с Катей</h1>
-      </div>
+    <header className="sticky top-0 z-20 border-b border-luxe-border bg-luxe-bg/95 backdrop-blur px-4 py-3 relative flex items-center justify-between">
+      <button className="tap-btn rounded-xl border border-luxe-border bg-white px-3 py-2 text-sm" onClick=${() => setShowMenu(true)}>☰</button>
+      <h1 className="text-lg font-semibold absolute left-1/2 -translate-x-1/2">База с Катей</h1>
       <button className="tap-btn rounded-xl border border-luxe-border bg-white px-3 py-2 text-sm" onClick=${loadAll}>Обновить</button>
     </header>
 
@@ -250,7 +260,7 @@ function App() {
       <div className="premium-card rounded-2xl p-4"><h2 className="font-semibold">Ожидают отправки / доставки</h2><ul className="mt-2 text-sm space-y-2">${(shippingOverview.items || []).slice(0, 7).map((s) => html`<li className="border-b border-luxe-border/60 pb-2">№${s.item_number} · ${s.platform || '—'} · ${formatDate(s.sale_date)} · <${ShippingBadge} status=${s.shipping_status}/></li>`)}</ul></div></section>`}
 
       ${!loading && page === 'inventory' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-3 grid grid-cols-1 gap-2 items-end"><div><label className="text-xs text-luxe-muted">Поиск</label><input className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="Номер или модель"/></div><div><label className="text-xs text-luxe-muted">Статус</label><select className="w-full rounded-xl border border-luxe-border p-2 bg-white" value=${statusFilter} onChange=${(e) => setStatusFilter(e.target.value)}><option value="all">Все</option>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></div></div>
-      ${!filteredItems.length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">Склад пуст. Добавьте покупку через +</div>` : null}<div className="space-y-2">${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between items-start gap-2"><div><p className="font-semibold">№ товара: ${i.item_number || '—'}</p><p className="text-sm">Модель: ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">Категория: ${i.category || '—'}</p><p className="text-sm">Себестоимость: ${money(i.total_cost)}</p><p className="text-sm">Платформа: ${i.platform || '—'}</p><p className="text-sm">Цена продажи: ${n(i.sale_price) > 0 ? money(i.sale_price) : '—'}</p></div><div className="flex flex-col gap-1 items-end"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
+      ${!filteredItems.length ? html`<div className="premium-card rounded-2xl p-6 text-center text-luxe-muted">Склад пуст. Добавьте покупку через +</div>` : null}<div className="space-y-2">${filteredItems.map((i) => html`<article className="premium-card rounded-2xl p-3"><div className="flex justify-between items-start gap-2"><div><img src=${i.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=300'} className="h-16 w-16 rounded-lg object-contain bg-white border border-luxe-border mb-2"/><p className="font-semibold">№ товара: ${i.item_number || '—'}</p><p className="text-sm">Модель: ${i.model_name || '—'}</p><p className="text-sm text-luxe-muted">Категория: ${i.category || '—'}</p><p className="text-sm">Себестоимость: ${money(i.total_cost)}</p><p className="text-sm">Платформа: ${i.platform || '—'}</p><p className="text-sm">Цена продажи: ${n(i.sale_price) > 0 ? money(i.sale_price) : '—'}</p></div><div className="flex flex-col gap-1 items-end"><${StatusBadge} status=${i.status}/><${ShippingBadge} status=${i.shipping_status}/></div></div><button className="tap-btn mt-2 rounded-lg bg-luxe-accent text-white px-3 py-1.5 text-xs" onClick=${() => setSelected(i)}>Открыть</button></article>`)}</div></section>`}
 
       ${!loading && page === 'sales' && html`<section className="space-y-3"><div className="premium-card rounded-2xl p-4 flex flex-wrap items-end gap-3"><div><label className="text-xs text-luxe-muted">Месяц</label><input type="month" className="rounded-xl border border-luxe-border p-2 bg-white" value=${salesMonth} onInput=${(e) => setSalesMonth(e.target.value)}/></div><p className="text-sm text-luxe-muted">${formatMonthRu(monthSales.month || salesMonth)}</p></div>
       <div className="grid grid-cols-3 gap-3">${[['Продано', monthSales.summary?.sold_count || 0], ['Выручка', money(monthSales.summary?.revenue)], ['Прибыль', money(monthSales.summary?.profit)]].map(([t, v]) => html`<div className="premium-card rounded-2xl p-3"><p className="text-xs text-luxe-muted">${t}</p><p className="text-lg font-semibold">${v}</p></div>`)}</div>
@@ -273,7 +283,7 @@ function App() {
     ${showPurchase && html`<${PurchaseModal} close=${() => setShowPurchase(false)} save=${savePurchase} />`}
     ${showSale && html`<${SaleModal} close=${() => setShowSale(false)} items=${items} save=${saveSale} />`}
 
-    <nav className="fixed bottom-0 left-0 right-0 bg-white/95 border-t border-luxe-border mx-auto max-w-7xl p-2 grid grid-cols-3 gap-1 z-30">
+    <nav className="fixed bottom-0 left-0 right-0 bg-white/95 border-t border-luxe-border mx-auto max-w-7xl p-2 grid grid-cols-3 gap-1 z-20">
       ${BOTTOM_PAGES.map(([id, label, icon]) => html`<button onClick=${() => setPage(id)} className=${`tap-btn rounded-xl text-xs py-2 ${id === page ? 'bg-luxe-accent text-white' : 'text-luxe-muted'}`}>${icon}<br/>${label}</button>`)}
     </nav>
 
@@ -332,7 +342,7 @@ function PurchaseModal({ close, save }) {
       <label className="text-xs">Себестоимость (авто)<input type="number" disabled className="w-full mt-1 rounded-xl border p-2 bg-slate-100" value=${computedTotal}/></label>
       <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => setF({ ...f, status: e.target.value })}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
     </div>
-    <div className="rounded-xl border border-luxe-border p-3 bg-white"><p className="text-sm font-medium">Фото товара</p><input type="file" accept="image/*" onChange=${onPickPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Выберите фото с телефона/компьютера.</p><label className="text-xs text-luxe-muted mt-2 block">Ссылка Buyee (опционально)</label><input className="w-full mt-1 rounded-xl border p-2 text-sm" value=${f.buyee_url} onInput=${(e) => setF({ ...f, buyee_url: e.target.value })} placeholder="https://buyee.jp/..."/>${(preview || f.photo_url) ? html`<img src=${preview || f.photo_url} className="mt-2 h-28 rounded-lg object-cover"/>` : null}</div>
+    <div className="rounded-xl border border-luxe-border p-3 bg-white"><p className="text-sm font-medium">Фото товара</p><input type="file" accept="image/*" onChange=${onPickPhoto} className="mt-2 text-sm"/><p className="text-xs text-luxe-muted mt-1">Выберите фото с телефона/компьютера.</p><label className="text-xs text-luxe-muted mt-2 block">Ссылка Buyee (опционально)</label><input className="w-full mt-1 rounded-xl border p-2 text-sm" value=${f.buyee_url} onInput=${(e) => setF({ ...f, buyee_url: e.target.value })} placeholder="https://buyee.jp/..."/>${(preview || f.photo_url) ? html`<img src=${preview || f.photo_url} className="mt-2 h-28 w-full rounded-lg object-contain bg-white"/>` : null}</div>
     <label className="text-xs inline-flex items-center gap-2"><input type="checkbox" checked=${boolText(f.need_rephoto) === 'yes'} onChange=${(e) => setF({ ...f, need_rephoto: e.target.checked ? 'yes' : 'no' })}/>Нужно перефото</label>
     <label className="text-xs block">Заметки<textarea className="w-full mt-1 rounded-xl border p-2" rows="2" value=${f.notes} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea></label>
     <button disabled=${invalid} className="tap-btn w-full rounded-xl bg-luxe-accent text-white py-3 disabled:opacity-50">Сохранить покупку</button></form></div>`;
@@ -449,8 +459,8 @@ function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, 
     reader.readAsDataURL(file);
   };
 
-  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-30 overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); save(item.item_number, { ...f, total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }} className="max-w-3xl mx-auto premium-card rounded-2xl p-4 space-y-3"><div className="flex justify-between"><h2 className="font-semibold text-lg">Карточка № ${item.item_number}</h2><button type="button" onClick=${close}>✕</button></div>
-  <div className="grid md:grid-cols-2 gap-3"><img src=${f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-cover"/><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2"><button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
+  return html`<div className="fixed inset-0 bg-black/45 p-3 md:p-8 z-[60] overflow-auto"><form onSubmit=${(e) => { e.preventDefault(); save(item.item_number, { ...sanitizeMediaFields(f), total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }} className="max-w-3xl mx-auto premium-card rounded-2xl p-4 space-y-3 max-h-[calc(100vh-2rem)] overflow-auto pb-24"><div className="flex justify-between"><h2 className="font-semibold text-lg">Карточка № ${item.item_number}</h2><button type="button" onClick=${close}>✕</button></div>
+  <div className="grid md:grid-cols-2 gap-3"><img src=${f.photo_url || 'https://images.unsplash.com/photo-1491553895911-0055eca6402d?w=900'} className="w-full h-56 rounded-xl object-contain bg-white"/><div className="space-y-2"><p className="text-sm">Модель: <b>${f.model_name || '—'}</b></p><p className="text-sm">Категория: <b>${f.category || '—'}</b></p><p className="text-sm">Описание товара:</p><textarea className="w-full rounded-xl border p-2 text-sm" rows="3" value=${f.notes || ''} onInput=${(e) => setF({ ...f, notes: e.target.value })}></textarea><p className="text-sm">Статус: <${StatusBadge} status=${f.status}/></p><p className="text-sm">Дата покупки: <b>${formatDate(f.purchase_date)}</b></p><p className="text-sm">Себестоимость: <b>${money(f.total_cost)}</b></p>${f.buyee_url ? html`<p className="text-sm">Buyee: <a className="text-blue-700 underline" href=${f.buyee_url} target="_blank">ссылка</a></p>` : html`<p className="text-sm text-luxe-muted">Buyee: —</p>`}<p className="text-sm">Продажа: <b>${f.sale_date ? `${f.platform || '—'} · ${formatDate(f.sale_date)} · ${money(f.sale_price)}` : '—'}</b></p><p className="text-sm">Доставка: <${ShippingBadge} status=${f.shipping_status}/></p>${(labelData || f.shipping_label_url) ? html`<a className="text-blue-700 underline text-sm" href=${labelData || f.shipping_label_url} target="_blank">Открыть лейбл</a>` : html`<p className="text-sm text-luxe-muted">Лейбл не прикреплен</p>`}<div className="flex gap-2"><button type="button" className="tap-btn rounded-xl bg-luxe-accent text-white px-4 py-2" onClick=${openSale}>Оформить продажу</button>${f.sale_id ? html`<button type="button" className="tap-btn rounded-xl border border-rose-300 text-rose-700 px-4 py-2" onClick=${() => cancelSale(item.item_number, f.sale_id)}>Отменить продажу</button>` : null}</div></div></div>
   <div className="grid md:grid-cols-2 gap-2">
     <label className="text-xs">Статус<select className="w-full mt-1 rounded-xl border p-2" value=${f.status} onChange=${(e) => { setF({ ...f, status: e.target.value }); updateStatus(item.item_number, e.target.value); }}>${Object.entries(STATUS_META).map(([k, v]) => html`<option value=${k}>${v.label}</option>`)}</select></label>
     <label className="text-xs">Статус доставки<select className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_status || 'pending'} onChange=${(e) => setF({ ...f, shipping_status: e.target.value })}>${Object.keys(SHIPPING_META).map((s) => html`<option value=${s}>${shippingLabel(s)}</option>`)}</select></label>
@@ -467,7 +477,7 @@ function ItemModal({ item, close, save, updateStatus, updateShipping, openSale, 
     <label className="text-xs md:col-span-2">Лейбл доставки<input className="w-full mt-1 rounded-xl border p-2" value=${f.shipping_label_url || ''} onInput=${(e) => setF({ ...f, shipping_label_url: e.target.value })}/></label>
     <div className="md:col-span-2"><button type="button" className="tap-btn rounded-xl border border-luxe-border px-4 py-2" onClick=${onPickShippingLabel}>Загрузить лейбл</button><input type="file" accept="application/pdf,image/*" onChange=${onPickShippingLabel} className="mt-2 text-sm"/></div>
   </div>
-  <div className="flex gap-2"><button type="button" className="tap-btn rounded-xl border border-luxe-border px-4 py-2" onClick=${() => updateShipping(item.item_number, { tracking_number: f.tracking_number, shipping_label_url: f.shipping_label_url, shipping_date: f.shipping_date, shipping_status: f.shipping_status })}>Обновить доставку</button><button className="tap-btn rounded-xl bg-luxe-ink text-white px-4 py-2">Сохранить карточку</button></div>
+  <div className="flex gap-2"><button type="button" className="tap-btn rounded-xl border border-luxe-border px-4 py-2" onClick=${() => { if (f.sale_id) { updateShipping(item.item_number, { tracking_number: f.tracking_number, shipping_label_url: f.shipping_label_url, shipping_date: f.shipping_date, shipping_status: f.shipping_status }); } save(item.item_number, { ...sanitizeMediaFields(f), total_cost: n(f.base_cost) + n(f.shipping_japan) + n(f.tax) + n(f.shipping_spain) + n(f.repair_cost) }); }}>Сохранить карточку</button></div>
   </form></div>`;
 }
 
