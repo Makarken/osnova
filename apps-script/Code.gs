@@ -17,7 +17,8 @@ const CONFIG = {
     purchases: 'Purchases',
     sales: 'Sales',
     statistics: 'Statistics',
-    activity: 'Activity Log'
+    activity: 'Activity Log',
+    settings: 'Settings'
   },
   HEADERS: {
     inventory: [
@@ -36,7 +37,8 @@ const CONFIG = {
       'is_cancelled', 'cancelled_at', 'notes'
     ],
     statistics: ['timestamp', 'active_stock', 'stock_value', 'sold_this_month', 'profit_this_month', 'profit_share_each', 'purchase_balance', 'pending_shipping', 'in_transit'],
-    activity: ['timestamp', 'item_number', 'action', 'field', 'old_value', 'new_value', 'actor']
+    activity: ['timestamp', 'item_number', 'action', 'field', 'old_value', 'new_value', 'actor'],
+    settings: ['key', 'value']
   },
   STATUS_LABELS: {
     purchased: 'Куплено',
@@ -81,6 +83,8 @@ function routeAction(action, payload) {
     createPurchase: () => ({ ok: true, item: createPurchase(payload) }),
     recordSale: () => ({ ok: true, item: recordSale(payload) }),
     updateShipping: () => ({ ok: true, item: updateShipping(payload.item_number, payload.shipping || {}) }),
+    updateMoneyReceived: () => ({ ok: true, item: updateMoneyReceived(payload.item_number, payload.money_received) }),
+    updatePurchaseBalance: () => ({ ok: true, value: updatePurchaseBalanceManual(payload.value) }),
     cancelSale: () => ({ ok: true, item: cancelSale(payload.item_number, payload.sale_id) }),
     updateStatus: () => ({ ok: true, item: updateStatus(payload.item_number, payload.status) }),
     editItem: () => ({ ok: true, item: editItem(payload.item_number, payload.updates || {}) })
@@ -187,6 +191,26 @@ function updateSalesRow(saleId, updater) {
   sh.getRange(idx + 2, 1, 1, CONFIG.HEADERS.sales.length)
     .setValues([CONFIG.HEADERS.sales.map((h) => next[h] == null ? '' : next[h])]);
   return next;
+}
+
+function getSettingValue(key, fallback) {
+  const rows = getRows(CONFIG.SHEETS.settings, CONFIG.HEADERS.settings);
+  const row = rows.find((r) => String(r.key) === String(key));
+  return row ? row.value : fallback;
+}
+
+function setSettingValue(key, value) {
+  const sh = getSheet(CONFIG.SHEETS.settings, CONFIG.HEADERS.settings);
+  const rows = getRows(CONFIG.SHEETS.settings, CONFIG.HEADERS.settings);
+  const idx = rows.findIndex((r) => String(r.key) === String(key));
+  const row = { key: String(key), value: String(value == null ? '' : value) };
+  if (idx === -1) {
+    sh.appendRow(CONFIG.HEADERS.settings.map((h) => row[h] || ''));
+  } else {
+    sh.getRange(idx + 2, 1, 1, CONFIG.HEADERS.settings.length)
+      .setValues([CONFIG.HEADERS.settings.map((h) => row[h] || '')]);
+  }
+  return row.value;
 }
 
 function toNum(v) { return Number(v || 0); }
@@ -460,6 +484,34 @@ function updateShipping(itemNumber, shipping) {
   return next;
 }
 
+function updateMoneyReceived(itemNumber, value) {
+  const current = getItemByNumber(itemNumber);
+  if (!current) throw new Error('Товар не найден');
+  const next = normalizeItem({ money_received: value }, current);
+  updateInventoryRow(itemNumber, next);
+
+  if (current.sale_id) {
+    updateSalesRow(current.sale_id, (sale) => ({
+      ...sale,
+      money_received: next.money_received,
+      notes: next.notes
+    }));
+  }
+
+  addActivity({
+    item_number: itemNumber,
+    action: 'Обновление оплаты',
+    field: 'money_received',
+    old_value: boolText(current.money_received) === 'yes' ? 'yes' : 'no',
+    new_value: next.money_received
+  });
+  return next;
+}
+
+function updatePurchaseBalanceManual(value) {
+  return setSettingValue('purchase_balance_manual', toNum(value));
+}
+
 function cancelSale(itemNumber, saleId) {
   const current = getItemByNumber(itemNumber);
   if (!current) throw new Error('Товар не найден');
@@ -519,17 +571,18 @@ function getActivity() {
     .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
 }
 
-function calcPurchaseBalance(items) {
-  return items.reduce((acc, i) => {
-    const sold = ['sold', 'shipped', 'delivered'].includes(String(i.status));
-    const moneyBack = boolText(i.money_received) === 'yes';
-    if (!sold || !moneyBack) return acc + toNum(i.total_cost);
-    return acc;
-  }, 0);
+function calcPurchaseBalance(purchases, sales) {
+  const spent = purchases.reduce((acc, p) => acc + toNum(p.total_cost), 0);
+  const returned = sales
+    .filter((s) => boolText(s.money_received) === 'yes')
+    .reduce((acc, s) => acc + toNum(s.total_cost), 0);
+  const manual = toNum(getSettingValue('purchase_balance_manual', 0));
+  return returned - spent + manual;
 }
 
 function getDashboard() {
   const items = getInventory();
+  const purchases = getRows(CONFIG.SHEETS.purchases, CONFIG.HEADERS.purchases);
   const sales = getValidSales();
   const currentMonth = monthKey(new Date().toISOString());
   const monthSales = sales.filter((s) => monthKey(saleDateValue(s)) === currentMonth);
@@ -541,7 +594,7 @@ function getDashboard() {
     sold_this_month: monthSales.length,
     profit_this_month: monthSales.reduce((a, s) => a + toNum(s.profit), 0),
     profit_share_each: monthSales.reduce((a, s) => a + toNum(s.profit), 0) / 3,
-    purchase_balance: calcPurchaseBalance(items),
+    purchase_balance: calcPurchaseBalance(purchases, sales),
     pending_shipping: sales.filter((s) => shippingStatus(s.shipping_status) === 'pending').length,
     in_transit: sales.filter((s) => shippingStatus(s.shipping_status) === 'shipped').length
   };
@@ -607,7 +660,7 @@ function getShippingOverview() {
       delivered: delivered.length
     },
     items: sales
-      .filter((s) => ['pending', 'shipped'].includes(shippingStatus(s.shipping_status)))
+      .filter((s) => shippingStatus(s.shipping_status) === 'pending')
       .sort((a, b) => String(b.sale_date || b.timestamp).localeCompare(String(a.sale_date || a.timestamp)))
       .slice(0, 20)
   };
