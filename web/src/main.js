@@ -200,10 +200,22 @@ function App() {
   const savePurchase = async (payload) => {
     try {
       setError('');
-      const r = await api('createPurchase', normalizePurchasePayload(payload));
-      if (!r?.item?.item_number) throw new Error('Покупка не сохранилась в ответе API');
+      const requestPayload = normalizePurchasePayload(payload);
+      const r = await api('createPurchase', requestPayload);
+      console.info('[createPurchase] request payload:', requestPayload);
+      console.info('[createPurchase] response:', r);
+
+      if (!r?.ok || !r?.item) {
+        throw new Error(`Некорректный ответ createPurchase: ${JSON.stringify(r)}`);
+      }
+
+      const createdItemNumber = String(r.item.item_number || r.item.item_id || '').trim();
+      if (!createdItemNumber) {
+        throw new Error(`createPurchase вернул item без item_number/item_id: ${JSON.stringify(r.item)}`);
+      }
+
       const inv = await api('getInventory');
-      const persisted = (inv.items || []).some((x) => String(x.item_number) === String(r.item.item_number));
+      const persisted = (inv.items || []).some((x) => String(x.item_number || x.item_id || '') === createdItemNumber);
       if (!persisted) throw new Error('Покупка не найдена в таблице после сохранения');
       setShowPurchase(false);
       setShowFabMenu(false);
